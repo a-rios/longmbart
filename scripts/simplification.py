@@ -108,6 +108,8 @@ class Simplifier(pl.LightningModule):
 
         config = MLongformerEncoderDecoderConfig.from_pretrained(self.args.model_path)
         config.attention_dropout = self.args.attention_dropout
+        config.dropout = self.args.dropout
+        config.activation_dropout = self.args.activation_dropout
         config.gradient_checkpointing = self.args.grad_ckpt
         config.attention_mode = self.args.attention_mode
         config.attention_window = [self.args.attention_window] * config.encoder_layers
@@ -298,6 +300,8 @@ class Simplifier(pl.LightningModule):
                             help="Path to a checkpoint to load model weights but not training state")
         parser.add_argument('--grad_ckpt', action='store_true', help='Enable gradient checkpointing to save memory')
         parser.add_argument("--attention_dropout", type=float, default=0.1, help="attention dropout")
+        parser.add_argument("--dropout", type=float, default=0.1, help="dropout")
+        parser.add_argument("--activation_dropout", type=float, default=0.0, help="activation_dropout")
         parser.add_argument("--attention_mode", type=str, default='sliding_chunks', help="Longformer attention mode")
         parser.add_argument("--attention_window", type=int, default=512, help="Attention window")
         parser.add_argument("--label_smoothing", type=float, default=0.0, required=False)
