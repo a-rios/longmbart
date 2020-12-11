@@ -310,6 +310,8 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--train_target", type=str, default=None, help="Path to the target train file.")
         parser.add_argument("--val_source", type=str, default=None, help="Path to the source validation file.")
         parser.add_argument("--val_target", type=str, default=None, help="Path to the target validation file.")
+        parser.add_argument("--test_source", type=str, default=None, help="Path to the source test file (to evaluate after training is finished).")
+        parser.add_argument("--test_target", type=str, default=None, help="Path to the target test file (to evaluate after training is finished).")
         return parser
 
 
@@ -325,7 +327,7 @@ def main(args):
     else:
         model = Simplifier(args)
 
-    model.datasets = datasets.load_dataset('text', data_files={'train_source': args.train_source, 'train_target': args.train_target, 'val_source': args.val_source, 'val_target': args.val_target})
+    model.datasets = datasets.load_dataset('text', data_files={'train_source': args.train_source, 'train_target': args.train_target, 'val_source': args.val_source, 'val_target': args.val_target, 'test_source': args.test_source, 'test_target': args.test_target })
 
     logger = TestTubeLogger(
         save_dir=args.save_dir,
