@@ -361,7 +361,10 @@ def main(args):
 
     print(args)
 
-    early_stop_callback = EarlyStopping(monitor=args.early_stopping_metric, min_delta=0.00, patience=args.patience, verbose=False, mode='max') # metrics: vloss, bleu, rougeL
+    mode='max'
+    if args.early_stopping_metric == 'vloss':
+        mode='min'
+    early_stop_callback = EarlyStopping(monitor=args.early_stopping_metric, min_delta=0.00, patience=args.patience, verbose=False, mode=mode) # metrics: vloss, bleu, rougeL
 
     trainer = pl.Trainer(gpus=args.gpus, distributed_backend='ddp' if torch.cuda.is_available() else None,
                          track_grad_norm=-1,
