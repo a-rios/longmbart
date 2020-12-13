@@ -9,6 +9,7 @@ from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoConfig
 from transformers.optimization import get_linear_schedule_with_warmup, Adafactor
 import nlp
 from rouge_score import rouge_scorer
+import sacrebleu
 
 import pytorch_lightning as pl
 from pytorch_lightning.logging import TestTubeLogger
@@ -55,42 +56,31 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=-100):
 
 
 class SimplificationDataset(Dataset):
-    def __init__(self, dataset, name, tokenizer, max_input_len, max_output_len):
-        self.dataset = dataset
+    def __init__(self, inputs, labels, name, tokenizer, max_input_len, max_output_len):
+        self.inputs = inputs
+        self.labels = labels
         self.name = name # train, val, test
         self.tokenizer = tokenizer
         self.max_input_len = max_input_len
         self.max_output_len = max_output_len
 
     def __len__(self):
-        return len(self.dataset)
+        return len(self.inputs)
 
     def __getitem__(self, idx):
-        #entry = self.dataset[idx]
-        source = self.dataset[self.name + "_source"][idx]['text']
-        target = self.dataset[self.name + "_target"][idx]['text']
-        sample = self.tokenizer.prepare_seq2seq_batch(src_texts=source, src_lang="de_DE", tgt_texts=target, tgt_lang="de_DE" , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False)
-        test = self.tokenizer.encode(source, truncation=True, max_length=self.max_input_len)
-        #output_ids = self.tokenizer.encode(target, truncation=True, max_length=self.max_output_len)
+        source = self.inputs[idx]['text']
+        target = self.labels[idx]['text'] 
+        sample = self.tokenizer.prepare_seq2seq_batch(src_texts=source, src_lang="de_DE", tgt_texts=target, tgt_lang="de_DE" , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False) # TODO move this to _get_dataloader, preprocess everything at once?
+
         input_ids = sample['input_ids'].squeeze()
         output_ids = sample['labels'].squeeze()
         
-        #if self.tokenizer.bos_token_id is None:  # pegasus
-            #output_ids = [self.tokenizer.pad_token_id] + output_ids
         return input_ids, output_ids
 
     @staticmethod
     def collate_fn(batch):
         
-        ## mBART: pad == 1
         pad_token_id = 1
-        ## A hack to know if this is bart or pegasus. DDP doesn't like global variables nor class-level memebr variables
-        #if batch[0][0][-1].item() == 2:
-            #pad_token_id = 1  # AutoTokenizer.from_pretrained('facebook/bart-base').pad_token_id
-        #elif batch[0][0][-1].item() == 1:
-            #pad_token_id = 0  # AutoTokenizer.from_pretrained('google/pegasus-large').pad_token_id
-        #else:
-            #assert False
     
         input_ids, output_ids = list(zip(*batch))
         input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=pad_token_id)
@@ -176,8 +166,10 @@ class Simplifier(pl.LightningModule):
         input_ids, attention_mask = self._prepare_input(input_ids)
         generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
                                             use_cache=True, max_length=self.args.max_output_len,
-                                            num_beams=1)
+                                            num_beams=self.args.beam_size)
+       
         generated_str = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=True)
+        
         gold_str = self.tokenizer.batch_decode(output_ids.tolist(), skip_special_tokens=True)
         scorer = rouge_scorer.RougeScorer(rouge_types=['rouge1', 'rouge2', 'rougeL', 'rougeLsum'], use_stemmer=False)
         rouge1 = rouge2 = rougel = rougelsum = 0.0
@@ -191,18 +183,20 @@ class Simplifier(pl.LightningModule):
         rouge2 /= len(generated_str)
         rougel /= len(generated_str)
         rougelsum /= len(generated_str)
-
+        bleu = sacrebleu.corpus_bleu(generated_str, [gold_str])
         return {'vloss': vloss,
                 'rouge1': vloss.new_zeros(1) + rouge1,
                 'rouge2': vloss.new_zeros(1) + rouge2,
                 'rougeL': vloss.new_zeros(1) + rougel,
-                'rougeLsum': vloss.new_zeros(1) + rougelsum, }
+                'rougeLsum': vloss.new_zeros(1) + rougelsum, 
+                'bleu' : vloss.new_zeros(1) + bleu.score,
+                'decoded' : generated_str}
 
     def validation_epoch_end(self, outputs):
         for p in self.model.parameters():
             p.requires_grad = True
 
-        names = ['vloss', 'rouge1', 'rouge2', 'rougeL', 'rougeLsum']
+        names = ['vloss', 'rouge1', 'rouge2', 'rougeL', 'rougeLsum', 'bleu']
         metrics = []
         for name in names:
             metric = torch.stack([x[name] for x in outputs]).mean()
@@ -212,6 +206,12 @@ class Simplifier(pl.LightningModule):
             metrics.append(metric)
         logs = dict(zip(*[names, metrics]))
         print(logs)
+        outfile = self.args.save_dir + "/" + args.save_prefix + "/_val_out_ep_" + str(self.current_epoch + "_global_step_" + self._global_step)
+        if self.args.test:
+            outfile = self.args.decoded
+        with open(outfile, 'w') as f:
+            for s in outputs['decoded']:
+                outfile.write(s)
         return {'avg_val_loss': logs['vloss'], 'log': logs, 'progress_bar': logs}
 
     def test_step(self, batch, batch_nb):
@@ -238,9 +238,12 @@ class Simplifier(pl.LightningModule):
     def _get_dataloader(self, current_dataloader, split_name, is_train):
         if current_dataloader is not None:
             return current_dataloader
-        dataset = SimplificationDataset(dataset=self.datasets, name=split_name, tokenizer=self.tokenizer,
+       
+        dataset = SimplificationDataset(inputs=self.datasets[split_name + "_source"], labels=self.datasets[split_name + "_target"] , name=split_name, tokenizer=self.tokenizer,
                                        max_input_len=self.args.max_input_len, max_output_len=self.args.max_output_len)
+      
         sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=is_train) if self.trainer.use_ddp else None
+
         return DataLoader(dataset, batch_size=self.args.batch_size, shuffle=(sampler is None),
                           num_workers=self.args.num_workers, sampler=sampler,
                           collate_fn=SimplificationDataset.collate_fn)
@@ -280,6 +283,7 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--lr", type=float, default=0.00003, help="Maximum learning rate")
         parser.add_argument("--val_every", type=float, default=1.0, help="Number of training steps between validations")
         parser.add_argument("--val_percent_check", default=1.00, type=float, help='Percent of validation data used')
+        parser.add_argument("--test_percent_check", default=1.00, type=float, help='Percent of test data used')
         parser.add_argument("--num_workers", type=int, default=0, help="Number of data loader workers")
         parser.add_argument("--seed", type=int, default=1234, help="Seed")
         parser.add_argument("--epochs", type=int, default=5, help="Number of epochs")
@@ -289,6 +293,8 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--max_input_len", type=int, default=512,
                             help="maximum num of wordpieces/summary. Used for training and testing")
         parser.add_argument("--test", action='store_true', help="Test only, no training")
+        parser.add_argument("--decoded", type=str, default='decoded.out', help="Output file to write decoded sequence to.")
+        parser.add_argument("--beam-size", type=int, default=4, help="Beam size for inference when testing/validating. Default: 4.")
         parser.add_argument("--model_path", type=str, default='facebook/bart-base',
                             help="Path to the checkpoint directory or model name")
         parser.add_argument("--tokenizer", type=str, default='facebook/bart-base')
@@ -326,7 +332,7 @@ def main(args):
         model = Simplifier.load_from_checkpoint(args.from_pretrained, args)
     else:
         model = Simplifier(args)
-
+    
     model.datasets = datasets.load_dataset('text', data_files={'train_source': args.train_source, 'train_target': args.train_target, 'val_source': args.val_source, 'val_target': args.val_target, 'test_source': args.test_source, 'test_target': args.test_target })
 
     logger = TestTubeLogger(
@@ -359,7 +365,7 @@ def main(args):
                          num_sanity_val_steps=2 if not args.debug else 0,
                          check_val_every_n_epoch=1 if not args.debug else 1,
                          val_percent_check=args.val_percent_check,
-                         test_percent_check=args.val_percent_check,
+                         test_percent_check=args.test_percent_check,
                          logger=logger,
                          checkpoint_callback=checkpoint_callback if not args.disable_checkpointing else False,
                          show_progress_bar=not args.no_progress_bar,
