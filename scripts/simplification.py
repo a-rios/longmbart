@@ -15,6 +15,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.logging import TestTubeLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.overrides.data_parallel import LightningDistributedDataParallel
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
 
 from longformer import LongformerEncoderDecoderForConditionalGeneration, LongformerEncoderDecoderConfig
@@ -104,7 +105,6 @@ class Simplifier(pl.LightningModule):
         config.attention_mode = self.args.attention_mode
         config.attention_window = [self.args.attention_window] * config.encoder_layers
         self.model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(self.args.model_path, config=config)
-       
         self.train_dataloader_object = self.val_dataloader_object = self.test_dataloader_object = None
 
     def _prepare_input(self, input_ids):
@@ -206,12 +206,14 @@ class Simplifier(pl.LightningModule):
             metrics.append(metric)
         logs = dict(zip(*[names, metrics]))
         print(logs)
-        outfile = self.args.save_dir + "/" + args.save_prefix + "/_val_out_ep_" + str(self.current_epoch + "_global_step_" + self._global_step)
+        outfile = self.args.save_dir + "/" + args.save_prefix + "/_val_out_ep_" + str(self.current_epoch) + "_global_step_" + str(self.global_step)
         if self.args.test:
             outfile = self.args.decoded
-        with open(outfile, 'w') as f:
-            for s in outputs['decoded']:
-                outfile.write(s)
+        with open(outfile, 'a') as f:
+            for batch in outputs:
+                for sample in batch['decoded']:
+                    f.write(sample + "\n")
+               
         return {'avg_val_loss': logs['vloss'], 'log': logs, 'progress_bar': logs}
 
     def test_step(self, batch, batch_nb):
@@ -220,20 +222,15 @@ class Simplifier(pl.LightningModule):
     def test_epoch_end(self, outputs):
         result = self.validation_epoch_end(outputs)
         print(result)
-
+        
     def configure_optimizers(self):
-        if self.args.adafactor:
-            optimizer = Adafactor(self.model.parameters(), lr=self.args.lr, scale_parameter=False, relative_step=False)
-        else:
-            optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args.lr)
-        if self.args.debug:
-            return optimizer  # const LR
-        num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
-        num_steps = self.args.dataset_size * self.args.epochs / num_gpus / self.args.grad_accum / self.args.batch_size
-        scheduler = get_linear_schedule_with_warmup(
-            optimizer, num_warmup_steps=self.args.warmup, num_training_steps=num_steps
-        )
-        return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args.lr)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=self.args.lr_reduce_factor, patience=self.args.lr_reduce_patience)
+        return {
+       'optimizer': optimizer,
+       'lr_scheduler': scheduler,
+       'monitor': 'train_loss'
+        }
 
     def _get_dataloader(self, current_dataloader, split_name, is_train):
         if current_dataloader is not None:
@@ -271,53 +268,64 @@ class Simplifier(pl.LightningModule):
         )
         return model
 
+
     @staticmethod
     def add_model_specific_args(parser, root_dir):
-        parser.add_argument("--save_dir", type=str, default='simplification')
-        parser.add_argument("--save_prefix", type=str, default='test')
-        parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
-        parser.add_argument("--grad_accum", type=int, default=1, help="number of gradient accumulation steps")
-        parser.add_argument("--gpus", type=int, default=-1,
-                            help="Number of gpus. 0 for CPU")
-        parser.add_argument("--warmup", type=int, default=1000, help="Number of warmup steps")
-        parser.add_argument("--lr", type=float, default=0.00003, help="Maximum learning rate")
-        parser.add_argument("--val_every", type=float, default=1.0, help="Number of training steps between validations")
-        parser.add_argument("--val_percent_check", default=1.00, type=float, help='Percent of validation data used')
-        parser.add_argument("--test_percent_check", default=1.00, type=float, help='Percent of test data used')
-        parser.add_argument("--num_workers", type=int, default=0, help="Number of data loader workers")
-        parser.add_argument("--seed", type=int, default=1234, help="Seed")
-        parser.add_argument("--epochs", type=int, default=5, help="Number of epochs")
-        parser.add_argument("--disable_checkpointing", action='store_true', help="No logging or checkpointing")
-        parser.add_argument("--max_output_len", type=int, default=256,
-                            help="maximum num of wordpieces/summary. Used for training and testing")
-        parser.add_argument("--max_input_len", type=int, default=512,
-                            help="maximum num of wordpieces/summary. Used for training and testing")
-        parser.add_argument("--test", action='store_true', help="Test only, no training")
-        parser.add_argument("--decoded", type=str, default='decoded.out', help="Output file to write decoded sequence to.")
-        parser.add_argument("--beam-size", type=int, default=4, help="Beam size for inference when testing/validating. Default: 4.")
-        parser.add_argument("--model_path", type=str, default='facebook/bart-base',
-                            help="Path to the checkpoint directory or model name")
-        parser.add_argument("--tokenizer", type=str, default='facebook/bart-base')
-        parser.add_argument("--no_progress_bar", action='store_true', help="no progress bar. Good for printing")
-        parser.add_argument("--fp32", action='store_true', help="default is fp16. Use --fp32 to switch to fp32")
-        parser.add_argument("--debug", action='store_true', help="debug run")
+        parser.add_argument("--model_path", type=str, help="Path to the checkpoint directory or model name")
+        parser.add_argument("--tokenizer", type=str, help="Path to the tokenizer directory.")
+        parser.add_argument("--save_dir", type=str, default='simplification', help="Directory to save models.")
+        parser.add_argument("--save_prefix", type=str, default='test', help="subfolder in save_dir for this model")
         parser.add_argument("--resume_ckpt", type=str, help="Path of a checkpoint to resume from")
-        parser.add_argument("--from_pretrained", type=str, default=None,
-                            help="Path to a checkpoint to load model weights but not training state")
-        parser.add_argument('--grad_ckpt', action='store_true', help='Enable gradient checkpointing to save memory')
-        parser.add_argument("--attention_dropout", type=float, default=0.1, help="attention dropout")
-        parser.add_argument("--dropout", type=float, default=0.1, help="dropout")
-        parser.add_argument("--activation_dropout", type=float, default=0.0, help="activation_dropout")
-        parser.add_argument("--attention_mode", type=str, default='sliding_chunks', help="Longformer attention mode")
-        parser.add_argument("--attention_window", type=int, default=512, help="Attention window")
-        parser.add_argument("--label_smoothing", type=float, default=0.0, required=False)
-        parser.add_argument("--adafactor", action='store_true', help="Use adafactor optimizer")
+        parser.add_argument("--from_pretrained", type=str, default=None,  help="Path to a checkpoint to load model weights but not training state")
+        
+        #data
         parser.add_argument("--train_source", type=str, default=None,  help="Path to the source train file.")
         parser.add_argument("--train_target", type=str, default=None, help="Path to the target train file.")
         parser.add_argument("--val_source", type=str, default=None, help="Path to the source validation file.")
         parser.add_argument("--val_target", type=str, default=None, help="Path to the target validation file.")
         parser.add_argument("--test_source", type=str, default=None, help="Path to the source test file (to evaluate after training is finished).")
         parser.add_argument("--test_target", type=str, default=None, help="Path to the target test file (to evaluate after training is finished).")
+        parser.add_argument("--max_output_len", type=int, default=256, help="maximum num of wordpieces/summary. Used for training and testing")
+        parser.add_argument("--max_input_len", type=int, default=512, help="maximum num of wordpieces/summary. Used for training and testing")
+        
+        parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
+        parser.add_argument("--num_workers", type=int, default=0, help="Number of data loader workers")
+        parser.add_argument("--grad_accum", type=int, default=1, help="Number of gradient accumulation steps.")
+        parser.add_argument("--gpus", type=int, default=-1, help="Number of gpus. 0 for CPU")
+        parser.add_argument("--seed", type=int, default=1234, help="Seed")
+        
+        ## model params:
+        parser.add_argument("--attention_dropout", type=float, default=0.1, help="attention dropout")
+        parser.add_argument("--dropout", type=float, default=0.1, help="dropout")
+        parser.add_argument("--activation_dropout", type=float, default=0.0, help="activation_dropout")
+        parser.add_argument("--attention_mode", type=str, default='sliding_chunks', help="Longformer attention mode")
+        parser.add_argument("--attention_window", type=int, default=512, help="Attention window")
+        parser.add_argument("--label_smoothing", type=float, default=0.0, required=False)
+        
+        # Optimization params:
+        #parser.add_argument("--warmup", type=int, default=1000, help="Number of warmup steps")
+        parser.add_argument("--lr", type=float, default=0.00003, help="Initial learning rate")
+        parser.add_argument("--val_every", type=float, default=1.0, help="Number of training steps between validations")
+        parser.add_argument("--val_percent_check", default=1.00, type=float, help='Percent of validation data used')
+        parser.add_argument("--max-epochs", type=int, default=100000, help="Maximum number of epochs (will stop training even if patience for early stopping has not been reached).")
+        parser.add_argument("--early_stopping_metric", type=str, default='rougeL', help="Metric to be used for early stopping: vloss, rouge1, rouge2, rougeL, rougeLsum, bleu")
+        parser.add_argument("--patience", type=int, default=10, help="Patience for early stopping.")
+        parser.add_argument("--lr_reduce_patience", type=int, default=8, help="Patience for LR reduction in Plateau scheduler.")
+        parser.add_argument("--lr_reduce_factor", type=float, default=0.5, help="Learning rate reduce factor for Plateau scheduler.")
+        parser.add_argument("--disable_checkpointing", action='store_true', help="No logging or checkpointing")
+        parser.add_argument('--grad_ckpt', action='store_true', help='Enable gradient checkpointing to save memory')
+        
+        ## inference params
+        parser.add_argument("--test", action='store_true', help="Test only, no training")
+        parser.add_argument("--decoded", type=str, default='decoded.out', help="Output file to write decoded sequence to.")
+        parser.add_argument("--beam-size", type=int, default=4, help="Beam size for inference when testing/validating. Default: 4.")
+        parser.add_argument("--test_percent_check", default=1.00, type=float, help='Percent of test data used')
+        
+        #logging params
+        parser.add_argument("--no_progress_bar", action='store_true', help="no progress bar. Good for printing")
+        parser.add_argument("--fp32", action='store_true', help="default is fp16. Use --fp32 to switch to fp32")
+        parser.add_argument("--debug", action='store_true', help="debug run")
+        
         return parser
 
 
@@ -353,11 +361,11 @@ def main(args):
 
     print(args)
 
-    args.dataset_size = 203037  # hardcode dataset size. Needed to compute number of steps for the lr scheduler
+    early_stop_callback = EarlyStopping(monitor=args.early_stopping_metric, min_delta=0.00, patience=args.patience, verbose=False, mode='max') # metrics: vloss, bleu, rougeL
 
     trainer = pl.Trainer(gpus=args.gpus, distributed_backend='ddp' if torch.cuda.is_available() else None,
                          track_grad_norm=-1,
-                         max_epochs=args.epochs if not args.debug else 100,
+                         max_epochs=args.max_epochs if not args.debug else 100,
                          max_steps=None if not args.debug else 1,
                          replace_sampler_ddp=False,
                          accumulate_grad_batches=args.grad_accum,
@@ -371,6 +379,7 @@ def main(args):
                          show_progress_bar=not args.no_progress_bar,
                          use_amp=not args.fp32, amp_level='O2',
                          resume_from_checkpoint=args.resume_ckpt,
+                         callbacks=[early_stop_callback]
                          )
     if not args.test:
         trainer.fit(model)
@@ -382,5 +391,4 @@ if __name__ == "__main__":
     parser = Simplifier.add_model_specific_args(main_arg_parser, os.getcwd())
     args = parser.parse_args()
     main(args)
-
 
