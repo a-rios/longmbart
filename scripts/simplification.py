@@ -111,7 +111,7 @@ class Simplifier(pl.LightningModule):
         attention_mask = torch.ones(input_ids.shape, dtype=torch.long, device=input_ids.device)
         attention_mask[input_ids == self.tokenizer.pad_token_id] = 0
         if isinstance(self.model, MLongformerEncoderDecoderForConditionalGeneration):
-            attention_mask[:, 0] = 2  # global attention on one token for all model params to be used, which is important for gradient checkpointing to work
+            attention_mask[:, -1] = 2  # put global attention on last token (target language tag)
             if self.args.attention_mode == 'sliding_chunks':
                 half_padding_mod = self.model.config.attention_window[0]
             elif self.args.attention_mode == 'sliding_chunks_no_overlap':
@@ -213,13 +213,6 @@ class Simplifier(pl.LightningModule):
             metrics.append(metric)
         logs = dict(zip(*[names, metrics]))
         print(logs)
-        #outfile = self.args.save_dir + "/" + args.save_prefix + "/_val_out_ep_" + str(self.current_epoch) + "_global_step_" + str(self.global_step)
-        #if self.args.test:
-            #outfile = self.args.decoded
-        #with open(outfile, 'a') as f:
-            #for batch in outputs:
-                #for sample in batch['decoded']:
-                    #f.write(sample + "\n")
                
         return {'val_loss': logs['vloss'], 'log': logs, 'progress_bar': logs}
 
@@ -325,13 +318,14 @@ class Simplifier(pl.LightningModule):
         ## inference params
         parser.add_argument("--test", action='store_true', help="Test only, no training")
         parser.add_argument("--decoded", type=str, default='decoded.out', help="Output file to write decoded sequence to.")
-        parser.add_argument("--beam-size", type=int, default=4, help="Beam size for inference when testing/validating. Default: 4.")
+        parser.add_argument("--beam_size", type=int, default=4, help="Beam size for inference when testing/validating. Default: 4.")
         parser.add_argument("--test_percent_check", default=1.00, type=float, help='Percent of test data used')
         
         #logging params
         parser.add_argument("--no_progress_bar", action='store_true', help="no progress bar. Good for printing")
         parser.add_argument("--fp32", action='store_true', help="default is fp16. Use --fp32 to switch to fp32")
         parser.add_argument("--debug", action='store_true', help="debug run")
+        parser.add_argument("--print_params", action='store_true', help="Print parameter names and shapes.")
         
         return parser
 
@@ -348,7 +342,16 @@ def main(args):
     else:
         model = Simplifier(args)
     
-    model.datasets = datasets.load_dataset('text', data_files={'train_source': args.train_source, 'train_target': args.train_target, 'val_source': args.val_source, 'val_target': args.val_target, 'test_source': args.test_source, 'test_target': args.test_target })
+    if args.print_params:
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                print(name + ":" + str(param.data.shape))
+        exit(0)
+    
+    if args.test:
+        model.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source, 'test_target': args.test_target })
+    else:
+        model.datasets = datasets.load_dataset('text', data_files={'train_source': args.train_source, 'train_target': args.train_target, 'val_source': args.val_source, 'val_target': args.val_target, 'test_source': args.test_source, 'test_target': args.test_target })
 
     logger = TestTubeLogger(
         save_dir=args.save_dir,
@@ -380,8 +383,8 @@ def main(args):
                          replace_sampler_ddp=False,
                          accumulate_grad_batches=args.grad_accum,
                          val_check_interval=args.val_every if not args.debug else 1,
-                         num_sanity_val_steps=2 if not args.debug else 0,
-                         check_val_every_n_epoch=1 if not args.debug else 1,
+                         num_sanity_val_steps=2 if not (args.debug or args.test) else 0,
+                         check_val_every_n_epoch=1 if not (args.debug or args.test) else 1,
                          val_percent_check=args.val_percent_check,
                          test_percent_check=args.test_percent_check,
                          logger=logger,

@@ -125,19 +125,19 @@ def main():
     if not os.path.exists(args.save_model_to):
         os.mkdir(args.save_model_to)
 
-    #create_long_model(
-        #save_model_to=args.save_model_to,
-        #base_model=args.base_model,
-        #tokenizer_name_or_path=args.tokenizer_name_or_path,
-        #attention_window=args.attention_window,
-        #max_pos=args.max_pos
-    #)
+    create_long_model(
+        save_model_to=args.save_model_to,
+        base_model=args.base_model,
+        tokenizer_name_or_path=args.tokenizer_name_or_path,
+        attention_window=args.attention_window,
+        max_pos=args.max_pos
+    )
 
     tokenizer = MBartTokenizer.from_pretrained(args.save_model_to)
     #TXT = "My friends are <mask> but they eat too many carbs."
     #TXT = "My friends are fine but they eat too many carbs."
     TXT = "Das ist ein Test."
-    model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.save_model_to)
+    #model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.save_model_to)
     model.model.encoder.config.gradient_checkpointing = True
     model.model.decoder.config.gradient_checkpointing = True
     #data = tokenizer([TXT], return_tensors='pt', padding='max_length', max_length=2048)
