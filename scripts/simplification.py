@@ -184,6 +184,13 @@ class Simplifier(pl.LightningModule):
         rougel /= len(generated_str)
         rougelsum /= len(generated_str)
         bleu = sacrebleu.corpus_bleu(generated_str, [gold_str])
+        
+        outfile = self.args.save_dir + "/" + args.save_prefix + "/_val_out_ep_" + str(self.current_epoch) + "_global_step_" + str(self.global_step)
+        if self.args.test:
+            outfile = self.args.decoded
+        with open(outfile, 'a') as f:
+            for sample in generated_str:
+                f.write(sample + "\n")
         return {'vloss': vloss,
                 'rouge1': vloss.new_zeros(1) + rouge1,
                 'rouge2': vloss.new_zeros(1) + rouge2,
@@ -206,15 +213,15 @@ class Simplifier(pl.LightningModule):
             metrics.append(metric)
         logs = dict(zip(*[names, metrics]))
         print(logs)
-        outfile = self.args.save_dir + "/" + args.save_prefix + "/_val_out_ep_" + str(self.current_epoch) + "_global_step_" + str(self.global_step)
-        if self.args.test:
-            outfile = self.args.decoded
-        with open(outfile, 'a') as f:
-            for batch in outputs:
-                for sample in batch['decoded']:
-                    f.write(sample + "\n")
+        #outfile = self.args.save_dir + "/" + args.save_prefix + "/_val_out_ep_" + str(self.current_epoch) + "_global_step_" + str(self.global_step)
+        #if self.args.test:
+            #outfile = self.args.decoded
+        #with open(outfile, 'a') as f:
+            #for batch in outputs:
+                #for sample in batch['decoded']:
+                    #f.write(sample + "\n")
                
-        return {'avg_val_loss': logs['vloss'], 'log': logs, 'progress_bar': logs}
+        return {'val_loss': logs['vloss'], 'log': logs, 'progress_bar': logs}
 
     def test_step(self, batch, batch_nb):
         return self.validation_step(batch, batch_nb)
@@ -229,7 +236,7 @@ class Simplifier(pl.LightningModule):
         return {
        'optimizer': optimizer,
        'lr_scheduler': scheduler,
-       'monitor': 'train_loss'
+       'monitor': 'val_loss'
         }
 
     def _get_dataloader(self, current_dataloader, split_name, is_train):
@@ -353,7 +360,7 @@ def main(args):
         filepath=os.path.join(args.save_dir, args.save_prefix, "checkpoints"),
         save_top_k=5,
         verbose=True,
-        monitor='avg_val_loss',
+        monitor='val_loss',
         mode='min',
         period=-1,
         prefix=''
