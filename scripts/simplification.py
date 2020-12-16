@@ -57,13 +57,15 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=-100):
 
 
 class SimplificationDataset(Dataset):
-    def __init__(self, inputs, labels, name, tokenizer, max_input_len, max_output_len):
+    def __init__(self, inputs, labels, name, tokenizer, max_input_len, max_output_len, src_lang, tgt_lang):
         self.inputs = inputs
         self.labels = labels
         self.name = name # train, val, test
         self.tokenizer = tokenizer
         self.max_input_len = max_input_len
         self.max_output_len = max_output_len
+        self.src_lang = src_lang
+        self.tgt_lang = tgt_lang
 
     def __len__(self):
         return len(self.inputs)
@@ -71,11 +73,10 @@ class SimplificationDataset(Dataset):
     def __getitem__(self, idx):
         source = self.inputs[idx]['text']
         target = self.labels[idx]['text'] 
-        sample = self.tokenizer.prepare_seq2seq_batch(src_texts=source, src_lang="de_DE", tgt_texts=target, tgt_lang="de_DE" , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False) # TODO move this to _get_dataloader, preprocess everything at once?
+        sample = self.tokenizer.prepare_seq2seq_batch(src_texts=source, src_lang=self.src_lang, tgt_texts=target, tgt_lang=self.tgt_lang , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt") # TODO move this to _get_dataloader, preprocess everything at once?
 
         input_ids = sample['input_ids'].squeeze()
         output_ids = sample['labels'].squeeze()
-        
         return input_ids, output_ids
 
     @staticmethod
@@ -96,6 +97,8 @@ class Simplifier(pl.LightningModule):
         self.args = params
         self.hparams = params
         self.tokenizer = MBartTokenizer.from_pretrained(self.args.tokenizer, use_fast=True)
+        self.src_lang = "de_DE"
+        self.tgt_lang = "de_DE" ## TODO makes this more generic
 
         config = MLongformerEncoderDecoderConfig.from_pretrained(self.args.model_path)
         config.attention_dropout = self.args.attention_dropout
@@ -166,8 +169,8 @@ class Simplifier(pl.LightningModule):
         input_ids, attention_mask = self._prepare_input(input_ids)
         generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
                                             use_cache=True, max_length=self.args.max_output_len,
-                                            num_beams=self.args.beam_size)
-       
+                                            num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_id=self.tokenizer.lang_code_to_id[self.tgt_lang]) # mBART source: X eso src_tag -> target: trg_tag X eos (no bos)
+
         generated_str = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=True)
         
         gold_str = self.tokenizer.batch_decode(output_ids.tolist(), skip_special_tokens=True)
@@ -237,7 +240,7 @@ class Simplifier(pl.LightningModule):
             return current_dataloader
        
         dataset = SimplificationDataset(inputs=self.datasets[split_name + "_source"], labels=self.datasets[split_name + "_target"] , name=split_name, tokenizer=self.tokenizer,
-                                       max_input_len=self.args.max_input_len, max_output_len=self.args.max_output_len)
+                                       max_input_len=self.args.max_input_len, max_output_len=self.args.max_output_len, src_lang=self.src_lang, tgt_lang=self.tgt_lang)
       
         sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=is_train) if self.trainer.use_ddp else None
 
