@@ -73,10 +73,12 @@ class SimplificationDataset(Dataset):
     def __getitem__(self, idx):
         source = self.inputs[idx]['text']
         target = self.labels[idx]['text'] 
-        sample = self.tokenizer.prepare_seq2seq_batch(src_texts=source, src_lang=self.src_lang, tgt_texts=target, tgt_lang=self.tgt_lang , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt") # TODO move this to _get_dataloader, preprocess everything at once?
+        sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], src_lang=self.src_lang, tgt_texts=[target], tgt_lang=self.tgt_lang , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt") # TODO move this to _get_dataloader, preprocess everything at once? 
+        ## changed set_tgt_lang_special_tokens in transformers.tokenization_mbart to prefix the target id instead of adding it at the end. See https://arxiv.org/pdf/2001.08210.pdf, "A language id symbol <LID> is usedas the initial token to predict the sentence." 
 
         input_ids = sample['input_ids'].squeeze()
         output_ids = sample['labels'].squeeze()
+      
         return input_ids, output_ids
 
     @staticmethod
@@ -109,6 +111,7 @@ class Simplifier(pl.LightningModule):
         config.attention_window = [self.args.attention_window] * config.encoder_layers
         self.model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(self.args.model_path, config=config)
         self.train_dataloader_object = self.val_dataloader_object = self.test_dataloader_object = None
+        self.current_checkpoint =0
 
     def _prepare_input(self, input_ids):
         attention_mask = torch.ones(input_ids.shape, dtype=torch.long, device=input_ids.device)
@@ -130,6 +133,7 @@ class Simplifier(pl.LightningModule):
         decoder_input_ids = output_ids[:, :-1]
         decoder_attention_mask = (decoder_input_ids != self.tokenizer.pad_token_id)
         labels = output_ids[:, 1:].clone()
+
         outputs = self.model(
                 input_ids,
                 attention_mask=attention_mask,
@@ -173,7 +177,7 @@ class Simplifier(pl.LightningModule):
 
         generated_str = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=True)
         
-        gold_str = self.tokenizer.batch_decode(output_ids.tolist(), skip_special_tokens=True)
+        gold_str = self.tokenizer.batch_decode(output_ids.tolist(), skip_special_tokens=True, clean_up_tokenization_spaces=True)
         scorer = rouge_scorer.RougeScorer(rouge_types=['rouge1', 'rouge2', 'rougeL', 'rougeLsum'], use_stemmer=False)
         rouge1 = rouge2 = rougel = rougelsum = 0.0
         for ref, pred in zip(gold_str, generated_str):
@@ -188,7 +192,7 @@ class Simplifier(pl.LightningModule):
         rougelsum /= len(generated_str)
         bleu = sacrebleu.corpus_bleu(generated_str, [gold_str])
         
-        outfile = self.args.save_dir + "/" + args.save_prefix + "/_val_out_ep_" + str(self.current_epoch) + "_global_step_" + str(self.global_step)
+        outfile = self.args.save_dir + "/" + args.save_prefix + "/_val_out_checkpoint_" + str(self.current_checkpoint)
         if self.args.test:
             outfile = self.args.decoded
         with open(outfile, 'a') as f:
@@ -215,8 +219,10 @@ class Simplifier(pl.LightningModule):
                 metric /= self.trainer.world_size
             metrics.append(metric)
         logs = dict(zip(*[names, metrics]))
+        print("Evaluation on checkpoint [{}] ".format(self.current_checkpoint))
         print(logs)
-               
+        
+        self.current_checkpoint +=1
         return {'val_loss': logs['vloss'], 'log': logs, 'progress_bar': logs}
 
     def test_step(self, batch, batch_nb):
@@ -227,12 +233,12 @@ class Simplifier(pl.LightningModule):
         print(result)
         
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args.lr)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=self.args.lr_reduce_factor, patience=self.args.lr_reduce_patience)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args.lr)
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=self.optimizer, mode=self.lr_mode, factor=self.args.lr_reduce_factor, patience=self.args.lr_reduce_patience)
         return {
-       'optimizer': optimizer,
-       'lr_scheduler': scheduler,
-       'monitor': 'val_loss'
+       'optimizer': self.optimizer,
+       'lr_scheduler': self.scheduler,
+       'monitor': self.args.early_stopping_metric ## TODO change to args.early_stopping_metric
         }
 
     def _get_dataloader(self, current_dataloader, split_name, is_train):
@@ -362,22 +368,21 @@ def main(args):
         version=0  # always use version=0
     )
 
-    checkpoint_callback = ModelCheckpoint(
-        filepath=os.path.join(args.save_dir, args.save_prefix, "checkpoints"),
-        save_top_k=5,
-        verbose=True,
-        monitor='val_loss',
-        mode='min',
-        period=-1,
-        prefix=''
-    )
-
     print(args)
 
-    mode='max'
-    if args.early_stopping_metric == 'vloss':
-        mode='min'
-    early_stop_callback = EarlyStopping(monitor=args.early_stopping_metric, min_delta=0.00, patience=args.patience, verbose=False, mode=mode) # metrics: vloss, bleu, rougeL
+    model.lr_mode='max'
+    if args.early_stopping_metric == 'val_loss':
+        model.lr_mode='min'
+    early_stop_callback = EarlyStopping(monitor=args.early_stopping_metric, min_delta=0.00, patience=args.patience, verbose=True, mode=model.lr_mode) # metrics: val_loss, bleu, rougeL
+    
+    checkpoint_callback = ModelCheckpoint(
+    filepath=os.path.join(args.save_dir, args.save_prefix, "checkpoints"),
+                        save_top_k=5,
+                        verbose=True,
+                        monitor=args.early_stopping_metric,
+                        mode=model.lr_mode,
+                        period=-1,
+                        prefix='')
 
     trainer = pl.Trainer(gpus=args.gpus, distributed_backend='ddp' if torch.cuda.is_available() else None,
                          track_grad_norm=-1,
