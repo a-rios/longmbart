@@ -98,20 +98,31 @@ class Simplifier(pl.LightningModule):
         super().__init__()
         self.args = params
         self.hparams = params
-        self.tokenizer = MBartTokenizer.from_pretrained(self.args.tokenizer, use_fast=True)
         self.src_lang = "de_DE"
-        self.tgt_lang = "de_DE" ## TODO makes this more generic
+        self.tgt_lang = "de_DE" ## TODO make this more generic
+        if self.args.from_pretrained is not None or args.resume_ckpt is not None: ## TODO check if this is true with resume_ckpt
+            self._set_config()
+            self._load_pretrained()
 
-        config = MLongformerEncoderDecoderConfig.from_pretrained(self.args.model_path)
-        config.attention_dropout = self.args.attention_dropout
-        config.dropout = self.args.dropout
-        config.activation_dropout = self.args.activation_dropout
-        config.gradient_checkpointing = self.args.grad_ckpt
-        config.attention_mode = self.args.attention_mode
-        config.attention_window = [self.args.attention_window] * config.encoder_layers
-        self.model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(self.args.model_path, config=config)
         self.train_dataloader_object = self.val_dataloader_object = self.test_dataloader_object = None
         self.current_checkpoint =0
+        self.best_checkpoint = None
+        self.best_metric = 10000 if self.args.early_stopping_metric == 'vloss' else 0 ## keep track of best dev value of whatever metric is used in early stopping callback
+        self.num_not_improved = 0
+        self.save_hyperparameters()
+        
+    def _load_pretrained(self):
+        self.model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(self.args.from_pretrained, config=self.config)
+        self.tokenizer = MBartTokenizer.from_pretrained(self.args.tokenizer, use_fast=True)
+    
+    def _set_config(self):
+        self.config = MLongformerEncoderDecoderConfig.from_pretrained(self.args.from_pretrained)
+        self.config.attention_dropout = self.args.attention_dropout
+        self.config.dropout = self.args.dropout
+        self.config.activation_dropout = self.args.activation_dropout
+        self.config.gradient_checkpointing = self.args.grad_ckpt
+        self.config.attention_mode = self.args.attention_mode
+        self.config.attention_window = [self.args.attention_window] * self.config.encoder_layers
 
     def _prepare_input(self, input_ids):
         attention_mask = torch.ones(input_ids.shape, dtype=torch.long, device=input_ids.device)
@@ -173,7 +184,7 @@ class Simplifier(pl.LightningModule):
         input_ids, attention_mask = self._prepare_input(input_ids)
         generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
                                             use_cache=True, max_length=self.args.max_output_len,
-                                            num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_id=self.tokenizer.lang_code_to_id[self.tgt_lang]) # mBART source: X eso src_tag -> target: trg_tag X eos (no bos)
+                                            num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_id=self.tokenizer.lang_code_to_id[self.tgt_lang])  # TODO: mBART source: X eso src_tag -> target: trg_tag X eos (no bos). Original fairseq: eos = language tag. Use </s> for fine-tuning or set eos_token_id to self.tokenizer.lang_code_to_id[self.tgt_lang]?
 
         generated_str = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=True)
         
@@ -193,8 +204,7 @@ class Simplifier(pl.LightningModule):
         bleu = sacrebleu.corpus_bleu(generated_str, [gold_str])
         
         outfile = self.args.save_dir + "/" + args.save_prefix + "/_val_out_checkpoint_" + str(self.current_checkpoint)
-        if self.args.test:
-            outfile = self.args.decoded
+
         with open(outfile, 'a') as f:
             for sample in generated_str:
                 f.write(sample + "\n")
@@ -222,6 +232,15 @@ class Simplifier(pl.LightningModule):
         print("Evaluation on checkpoint [{}] ".format(self.current_checkpoint))
         print(logs)
         
+        ## save metric value + number of checkpoint if best
+        if self.args.early_stopping_metric == 'vloss' and logs['vloss'] < self.best_metric:
+            self.best_metric = logs['vloss']
+            self.best_checkpoint = self.current_checkpoint
+            print("New best checkpoint {}, with {} {}.".format(self.best_checkpoint, self.best_metric, self.args.early_stopping_metric))
+        elif logs[self.args.early_stopping_metric] > self.best_metric:
+            self.best_metric = logs[self.args.early_stopping_metric]
+            self.best_checkpoint = self.current_checkpoint
+            print("New best checkpoint {}, with {} {}.".format(self.best_checkpoint, self.best_metric, self.args.early_stopping_metric))
         self.current_checkpoint +=1
         return {'val_loss': logs['vloss'], 'log': logs, 'progress_bar': logs}
 
@@ -238,7 +257,7 @@ class Simplifier(pl.LightningModule):
         return {
        'optimizer': self.optimizer,
        'lr_scheduler': self.scheduler,
-       'monitor': self.args.early_stopping_metric ## TODO change to args.early_stopping_metric
+       'monitor': self.args.early_stopping_metric
         }
 
     def _get_dataloader(self, current_dataloader, split_name, is_train):
@@ -280,12 +299,12 @@ class Simplifier(pl.LightningModule):
 
     @staticmethod
     def add_model_specific_args(parser, root_dir):
-        parser.add_argument("--model_path", type=str, help="Path to the checkpoint directory or model name")
         parser.add_argument("--tokenizer", type=str, help="Path to the tokenizer directory.")
         parser.add_argument("--save_dir", type=str, default='simplification', help="Directory to save models.")
         parser.add_argument("--save_prefix", type=str, default='test', help="subfolder in save_dir for this model")
         parser.add_argument("--resume_ckpt", type=str, help="Path of a checkpoint to resume from")
         parser.add_argument("--from_pretrained", type=str, default=None,  help="Path to a checkpoint to load model weights but not training state")
+        parser.add_argument("--num_sanity_val_steps", type=int, default=0,  help="Number of evaluation sanity steps to run before starting the training. Default: 0.")
         
         #data
         parser.add_argument("--train_source", type=str, default=None,  help="Path to the source train file.")
@@ -325,7 +344,6 @@ class Simplifier(pl.LightningModule):
         parser.add_argument('--grad_ckpt', action='store_true', help='Enable gradient checkpointing to save memory')
         
         ## inference params
-        parser.add_argument("--test", action='store_true', help="Test only, no training")
         parser.add_argument("--decoded", type=str, default='decoded.out', help="Output file to write decoded sequence to.")
         parser.add_argument("--beam_size", type=int, default=4, help="Beam size for inference when testing/validating. Default: 4.")
         parser.add_argument("--test_percent_check", default=1.00, type=float, help='Percent of test data used')
@@ -346,10 +364,7 @@ def main(args):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
 
-    if args.from_pretrained is not None:
-        model = Simplifier.load_from_checkpoint(args.from_pretrained, args)
-    else:
-        model = Simplifier(args)
+    model = Simplifier(args)
     
     if args.print_params:
         for name, param in model.named_parameters():
@@ -357,10 +372,8 @@ def main(args):
                 print(name + ":" + str(param.data.shape))
         exit(0)
     
-    if args.test:
-        model.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source, 'test_target': args.test_target })
-    else:
-        model.datasets = datasets.load_dataset('text', data_files={'train_source': args.train_source, 'train_target': args.train_target, 'val_source': args.val_source, 'val_target': args.val_target, 'test_source': args.test_source, 'test_target': args.test_target })
+  
+    model.datasets = datasets.load_dataset('text', data_files={'train_source': args.train_source, 'train_target': args.train_target, 'val_source': args.val_source, 'val_target': args.val_target, 'test_source': args.test_source, 'test_target': args.test_target })
 
     logger = TestTubeLogger(
         save_dir=args.save_dir,
@@ -375,8 +388,11 @@ def main(args):
         model.lr_mode='min'
     early_stop_callback = EarlyStopping(monitor=args.early_stopping_metric, min_delta=0.00, patience=args.patience, verbose=True, mode=model.lr_mode) # metrics: val_loss, bleu, rougeL
     
+    custom_checkpoint_path = "checkpoint{{epoch:02d}}_{{{}".format(args.early_stopping_metric )
+    custom_checkpoint_path += ':.5f}'
+  
     checkpoint_callback = ModelCheckpoint(
-    filepath=os.path.join(args.save_dir, args.save_prefix, "checkpoints"),
+    filepath=os.path.join(args.save_dir, args.save_prefix, custom_checkpoint_path),
                         save_top_k=5,
                         verbose=True,
                         monitor=args.early_stopping_metric,
@@ -391,8 +407,8 @@ def main(args):
                          replace_sampler_ddp=False,
                          accumulate_grad_batches=args.grad_accum,
                          val_check_interval=args.val_every if not args.debug else 1,
-                         num_sanity_val_steps=2 if not (args.debug or args.test) else 0,
-                         check_val_every_n_epoch=1 if not (args.debug or args.test) else 1,
+                         num_sanity_val_steps=args.num_sanity_val_steps,
+                         check_val_every_n_epoch=1 if not (args.debug) else 1,
                          val_percent_check=args.val_percent_check,
                          test_percent_check=args.test_percent_check,
                          logger=logger,
@@ -402,13 +418,17 @@ def main(args):
                          resume_from_checkpoint=args.resume_ckpt,
                          callbacks=[early_stop_callback]
                          )
-    if not args.test:
-        trainer.fit(model)
+
+    trainer.fit(model)
+    ## write config + tokenizer to save_dir
+    model.model.save_pretrained(args.save_dir + "/" + args.save_prefix)
+    model.tokenizer.save_pretrained(args.save_dir + "/" + args.save_prefix)
+    print("Training ended. Best checkpoint {} with {} {}.".format(model.best_checkpoint, model.best_metric, args.early_stopping_metric))
     trainer.test(model)
 
 
 if __name__ == "__main__":
-    main_arg_parser = argparse.ArgumentParser(description="summarization")
+    main_arg_parser = argparse.ArgumentParser(description="simplification")
     parser = Simplifier.add_model_specific_args(main_arg_parser, os.getcwd())
     args = parser.parse_args()
     main(args)
