@@ -335,7 +335,7 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--lr", type=float, default=0.00003, help="Initial learning rate")
         parser.add_argument("--val_every", type=float, default=1.0, help="Number of training steps between validations")
         parser.add_argument("--val_percent_check", default=1.00, type=float, help='Percent of validation data used')
-        parser.add_argument("--max-epochs", type=int, default=100000, help="Maximum number of epochs (will stop training even if patience for early stopping has not been reached).")
+        parser.add_argument("--max_epochs", type=int, default=100000, help="Maximum number of epochs (will stop training even if patience for early stopping has not been reached).")
         parser.add_argument("--early_stopping_metric", type=str, default='rougeL', help="Metric to be used for early stopping: vloss, rouge1, rouge2, rougeL, rougeLsum, bleu")
         parser.add_argument("--patience", type=int, default=10, help="Patience for early stopping.")
         parser.add_argument("--lr_reduce_patience", type=int, default=8, help="Patience for LR reduction in Plateau scheduler.")

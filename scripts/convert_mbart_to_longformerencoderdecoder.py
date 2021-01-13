@@ -19,11 +19,12 @@ def create_long_model(
     base_model,
     tokenizer_name_or_path,
     attention_window,
-    max_pos
+    max_pos,
+    cache_dir
 ):
-    model = MBartForConditionalGeneration.from_pretrained(base_model)
-    tokenizer = MBartTokenizer.from_pretrained(tokenizer_name_or_path, model_max_length=max_pos)
-    config = MLongformerEncoderDecoderConfig.from_pretrained(base_model)
+    model = MBartForConditionalGeneration.from_pretrained(pretrained_model_name_or_path=base_model, cache_dir=cache_dir)
+    tokenizer = MBartTokenizer.from_pretrained(tokenizer_name_or_path, model_max_length=max_pos, cache_dir=cache_dir)
+    config = MLongformerEncoderDecoderConfig.from_pretrained(base_model, cache_dir=cache_dir)
     model.config = config
 
     # in BART attention_probs_dropout_prob is attention_dropout, but LongformerSelfAttention
@@ -119,6 +120,12 @@ def main():
         default=4096 * 4,
         help='maximum encoder positions'
     )
+    
+    parser.add_argument(
+        '--cache_dir',
+        type=str,
+        help='where to save original model'
+    )
 
     args = parser.parse_args()
 
@@ -130,7 +137,8 @@ def main():
         base_model=args.base_model,
         tokenizer_name_or_path=args.tokenizer_name_or_path,
         attention_window=args.attention_window,
-        max_pos=args.max_pos
+        max_pos=args.max_pos,
+        cache_dir=args.cache_dir
     )
 
     tokenizer = MBartTokenizer.from_pretrained(args.save_model_to)
