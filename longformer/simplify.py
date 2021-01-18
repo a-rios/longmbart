@@ -230,19 +230,14 @@ def main(args):
     checkpoint_path=os.path.join(args.model_path, args.checkpoint_name)
     simplifier = InferenceSimplifier(args)
     
-    cp = torch.load(checkpoint_path) # TODO: find better way to save a checkpoint of the submodel... note, pl.LightningModule.load_from_checkpoint does not work since the model parameters are not in the LightningModule but in the BartModel
-    new_state_dict = collections.OrderedDict()
-    for key in cp['state_dict']:
-        #print(key)
-        new_key = key.replace("model.", "", 1)
-        #print(new_key)
-        new_state_dict[new_key] = cp['state_dict'][key]
-    
-    model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.model_path)
-    model.load_state_dict(new_state_dict)
+    cp = torch.load(checkpoint_path)
+    simplifier.model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.model_path)
+   
+    simplifier.load_state_dict(cp["state_dict"])
+    #simplifier.load_from_checkpoint(checkpoint_path, args) ## does not work ("unexpected keys")
      
     if args.print_params:
-        for name, param in model.named_parameters():
+        for name, param in simplifier.named_parameters():
             if param.requires_grad:
                 print(name + ":" + str(param.data.shape))
         exit(0)
@@ -251,10 +246,6 @@ def main(args):
         simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source, 'test_target': args.test_target })
     else:
         simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source })
-    
-    simplifier.model = model
-    print(args)
-    
     
     logger = TestTubeLogger(
         save_dir=".",
