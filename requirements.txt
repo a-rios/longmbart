@@ -5,3 +5,5 @@ tensorboardX
 test-tube==0.7.5
 nlp
 rouge_score
+sacrebleu
+datasets
