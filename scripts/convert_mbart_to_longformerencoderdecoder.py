@@ -145,7 +145,7 @@ def main():
     #TXT = "My friends are <mask> but they eat too many carbs."
     #TXT = "My friends are fine but they eat too many carbs."
     TXT = "Das ist ein Test."
-    #model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.save_model_to)
+    model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.save_model_to)
     model.model.encoder.config.gradient_checkpointing = True
     model.model.decoder.config.gradient_checkpointing = True
     #data = tokenizer([TXT], return_tensors='pt', padding='max_length', max_length=2048)
