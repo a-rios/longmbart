@@ -6,7 +6,7 @@ import copy
 from transformers import MBartTokenizer
 
 from transformers import MBartForConditionalGeneration
-from transformers.modeling_bart import shift_tokens_right
+from transformers.models.bart.modeling_bart import shift_tokens_right
 from longformer.longformer_encoder_decoder import LongformerSelfAttentionForBart
 from longformer.longformer_encoder_decoder_mbart import MLongformerEncoderDecoderForConditionalGeneration, MLongformerEncoderDecoderConfig
 
@@ -40,7 +40,7 @@ def create_long_model(
 
     config.max_encoder_position_embeddings = max_pos
     config.max_decoder_position_embeddings = config.max_position_embeddings
-    del config.max_position_embeddings
+    del config.max_position_embeddings ## will be filled in from_pretrained with default value 1024, will initialize model.encoder.embed_positions.weight as (1026, 1024) instead of max_encoder_position_embeddings --> changed in line 630 of transformers.models.mbart.modeling_mbart for encoder, line 778 for decoder, also changed init in lines 640 (encoder) and 787 (decoder), as max length is again read from config instead of using defined values :/^
     max_pos += 2  # NOTE: BART has positions 0,1 reserved, so embedding size is max position + 2
     assert max_pos >= current_max_pos
 
@@ -53,6 +53,7 @@ def create_long_model(
         new_encoder_pos_embed[k:(k + step)] = model.model.encoder.embed_positions.weight[2:]
         k += step
     model.model.encoder.embed_positions.weight.data = new_encoder_pos_embed
+    
 
     # allocate a larger position embedding matrix for the decoder
     # new_decoder_pos_embed = model.model.decoder.embed_positions.weight.new_empty(max_pos, embed_size)
@@ -82,6 +83,7 @@ def create_long_model(
         longformer_self_attn_for_bart.output = layer.self_attn.out_proj
 
         layer.self_attn = longformer_self_attn_for_bart
+    
     logger.info(f'saving model to {save_model_to}')
     model.save_pretrained(save_model_to)
     tokenizer.save_pretrained(save_model_to)
@@ -145,6 +147,7 @@ def main():
     #TXT = "My friends are <mask> but they eat too many carbs."
     #TXT = "My friends are fine but they eat too many carbs."
     TXT = "Das ist ein Test."
+    TXT2 = "Noch ein Test."
     model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.save_model_to)
     model.model.encoder.config.gradient_checkpointing = True
     model.model.decoder.config.gradient_checkpointing = True
@@ -161,7 +164,7 @@ def main():
     #batch = tokenizer.prepare_seq2seq_batch(src_texts=[TXT], src_lang="en_XX", max_length=1024, truncation=False, padding="max_length")
     #translated_tokens = model.generate(**batch, decoder_start_token_id=tokenizer.lang_code_to_id["de_DE"])
     
-    batch = tokenizer.prepare_seq2seq_batch(src_texts=[TXT], src_lang="de_DE", max_length=1024, truncation=False, padding="max_length")
+    batch: dict = tokenizer.prepare_seq2seq_batch(src_texts=[TXT, TXT2], src_lang="de_DE", max_length=128, truncation=False, padding="max_length", return_tensors="pt")
     translated_tokens = model.generate(**batch, decoder_start_token_id=tokenizer.lang_code_to_id["en_XX"])
     translation = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
     print(translation)
@@ -170,7 +173,4 @@ def main():
 if __name__ == "__main__":
     main()
     
-    
-#{'input_ids': tensor([[  2646,  23902,    621,   5885,   1284,   1836,  73203,   5792,   5941,
-         #111758,      7,      5,      2, 250004]]), 'attention_mask': tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]])}
 

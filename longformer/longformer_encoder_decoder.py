@@ -1,7 +1,7 @@
 from typing import List, Optional, Tuple, Dict
-from torch import nn, Tensor
+from torch import nn, Tensor, narrow
 from longformer.longformer import LongformerSelfAttention
-from transformers.modeling_bart import BartConfig, BartForConditionalGeneration
+from transformers.models.bart.modeling_bart import BartConfig, BartForConditionalGeneration
 
 
 class LongformerEncoderDecoderForConditionalGeneration(BartForConditionalGeneration):
@@ -38,7 +38,6 @@ class LongformerEncoderDecoderConfig(BartConfig):
         self.gradient_checkpointing = gradient_checkpointing
         assert self.attention_mode in ['tvm', 'sliding_chunks', 'n2']
 
-
 class LongformerSelfAttentionForBart(nn.Module):
     def __init__(self, config, layer_id):
         super().__init__()
@@ -48,29 +47,29 @@ class LongformerSelfAttentionForBart(nn.Module):
 
     def forward(
         self,
-        query,
-        key: Optional[Tensor],
-        key_padding_mask: Optional[Tensor] = None,
-        layer_state: Optional[Dict[str, Optional[Tensor]]] = None,
-        attn_mask: Optional[Tensor] = None,
-        need_weights=False,
-        output_attentions=False,
+        hidden_states: Tensor, # shape (batch_size, q_len, model_size)
+        key_value_states: Optional[Tensor] = None, # cross-attention in transformers.models.mbart.modeling_mbart
+        past_key_value: Optional[Tuple[Tensor]] = None, # only for decoder
+        attention_mask: Optional[Tensor] = None, # shape (batch_size, 1, q_len, k_len) -> used to be key_padding_mask, attn_mask is now decoder_attention_mask (= autoregressive mask). 
+        layer_head_mask: Optional[Tensor] = None, # head dropout?
+        output_attentions: bool = False
     ) -> Tuple[Tensor, Optional[Tensor]]:
 
-        tgt_len, bsz, embed_dim = query.size()
+        bsz, tgt_len, embed_dim = hidden_states.size()
         assert embed_dim == self.embed_dim
-        assert list(query.size()) == [tgt_len, bsz, embed_dim]
-        assert attn_mask is None
-
+        assert list(hidden_states.size()) == [bsz, tgt_len, embed_dim]
+        ## new attention mask is (batch_size, 1, q_len, k_len), last dim (k) is the same for all q's, need to remove q (torch.narrow) -> (batch_size, 1, k_len) for LongformerSelfAttention
+        attention_mask = narrow(input=attention_mask, dim=2, start=0, length=1) # shape (batch_size, 1, 1, key_len
         outputs = self.longformer_self_attn(
-            query.transpose(0, 1),  # LongformerSelfAttention expects (bsz, seqlen, embd_dim)
-            attention_mask=key_padding_mask.unsqueeze(dim=1).unsqueeze(dim=1) * -1,
+            hidden_states,
+            attention_mask=attention_mask * -1, # shape (batch_size, 1, 1, key_len)
             head_mask=None,
             encoder_hidden_states=None,
             encoder_attention_mask=None,
             output_attentions=output_attentions,
         )
 
-        attn_output = self.output(outputs[0].transpose(0, 1))
-
-        return (attn_output,) + outputs[1:] if len(outputs) == 2 else (attn_output, None)
+        ## new: MBart encoder expects shape (seq_len, bsz, embed_dim), no transpose needed
+        attn_output = self.output(outputs[0])
+        # new return in MBartAttention has attn_output, attn_weights_reshaped, past_key_value (only for decoder), need to return 3 values (None for past_key_value)
+        return (attn_output, outputs[1:] ,None) if len(outputs) == 2 else (attn_output, None, None)

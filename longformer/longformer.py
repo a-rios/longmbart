@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from longformer.diagonaled_mm_tvm import diagonaled_mm as diagonaled_mm_tvm, mask_invalid_locations
 from longformer.sliding_chunks import sliding_chunks_matmul_qk, sliding_chunks_matmul_pv
 from longformer.sliding_chunks import sliding_chunks_no_overlap_matmul_qk, sliding_chunks_no_overlap_matmul_pv
-from transformers.modeling_roberta import RobertaConfig, RobertaModel, RobertaForMaskedLM
+from transformers.models.roberta.modeling_roberta import RobertaConfig, RobertaModel, RobertaForMaskedLM
 
 
 class Longformer(RobertaModel):
@@ -250,7 +250,7 @@ class LongformerSelfAttention(nn.Module):
             nonzero_selected_attn = selected_attn_4d[selection_padding_mask_nonzeros[0], :, selection_padding_mask_nonzeros[1]]
             attn[extra_attention_mask_nonzeros[::-1]] = nonzero_selected_attn.view(len(selection_padding_mask_nonzeros[0]), -1).type_as(hidden_states)
 
-        context_layer = attn.transpose(0, 1)
+        context_layer = attn.transpose(0, 1) # attn shape: (seq_len, bsz, embed_dim), context_layer shape: (bsz, seq_len, embed_dim)
         if output_attentions:
             if extra_attention_mask is not None:
                 # With global attention, return global attention probabilities only

@@ -1,7 +1,7 @@
 from typing import List, Optional, Tuple, Dict
 from torch import nn, Tensor
 from longformer.longformer import LongformerSelfAttention
-from transformers.modeling_mbart import MBartConfig, MBartForConditionalGeneration
+from transformers.models.mbart.modeling_mbart import MBartConfig, MBartForConditionalGeneration
 from longformer.longformer_encoder_decoder import LongformerSelfAttentionForBart
 
 class MLongformerEncoderDecoderForConditionalGeneration(MBartForConditionalGeneration):
