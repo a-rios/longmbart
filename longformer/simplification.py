@@ -24,7 +24,7 @@ from longformer.sliding_chunks import pad_to_window_size
 import logging
 from transformers import MBartTokenizer
 from transformers import MBartForConditionalGeneration
-from transformers.models.bart.modeling_bart import shift_tokens_right
+from transformers.models.mbart.modeling_mbart import shift_tokens_right
 from longformer.longformer_encoder_decoder import LongformerSelfAttentionForBart
 from longformer.longformer_encoder_decoder_mbart import MLongformerEncoderDecoderForConditionalGeneration, MLongformerEncoderDecoderConfig
 import datasets
@@ -114,6 +114,8 @@ class Simplifier(pl.LightningModule):
     def _load_pretrained(self):
         self.model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(self.args.from_pretrained, config=self.config)
         self.tokenizer = MBartTokenizer.from_pretrained(self.args.tokenizer, use_fast=True)
+        self.model.config.decoder_start_token_id = self.tokenizer.lang_code_to_id[self.tgt_lang]
+        print("de_DE id ", self.model.config.decoder_start_token_id)
     
     def _set_config(self):
         self.config = MLongformerEncoderDecoderConfig.from_pretrained(self.args.from_pretrained)
@@ -128,7 +130,7 @@ class Simplifier(pl.LightningModule):
         attention_mask = torch.ones(input_ids.shape, dtype=torch.long, device=input_ids.device)
         attention_mask[input_ids == self.tokenizer.pad_token_id] = 0
         if isinstance(self.model, MLongformerEncoderDecoderForConditionalGeneration):
-            attention_mask[:, -1] = 2  # put global attention on last token (target language tag)
+            attention_mask[:, -1] = 2  # put global attention on last token (target language tag), 1=attention, 0=padding, 2=global
             if self.args.attention_mode == 'sliding_chunks':
                 half_padding_mod = self.model.config.attention_window[0]
             elif self.args.attention_mode == 'sliding_chunks_no_overlap':
@@ -141,9 +143,10 @@ class Simplifier(pl.LightningModule):
 
     def forward(self, input_ids, output_ids):
         input_ids, attention_mask = self._prepare_input(input_ids)
-        decoder_input_ids = output_ids[:, :-1]
+        decoder_input_ids = shift_tokens_right(output_ids, self.config.pad_token_id) # (tgt_lang_id, output_ids, eos_token_id)
+        labels = decoder_input_ids[:, 1:].clone()
+        decoder_input_ids = decoder_input_ids[:, :-1]
         decoder_attention_mask = (decoder_input_ids != self.tokenizer.pad_token_id)
-        labels = output_ids[:, 1:].clone()
 
         outputs = self.model(
                 input_ids,

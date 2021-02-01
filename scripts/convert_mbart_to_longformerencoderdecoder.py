@@ -6,7 +6,7 @@ import copy
 from transformers import MBartTokenizer
 
 from transformers import MBartForConditionalGeneration
-from transformers.models.bart.modeling_bart import shift_tokens_right
+from transformers.models.mbart.modeling_mbart import shift_tokens_right
 from longformer.longformer_encoder_decoder import LongformerSelfAttentionForBart
 from longformer.longformer_encoder_decoder_mbart import MLongformerEncoderDecoderForConditionalGeneration, MLongformerEncoderDecoderConfig
 
@@ -164,7 +164,7 @@ def main():
     #batch = tokenizer.prepare_seq2seq_batch(src_texts=[TXT], src_lang="en_XX", max_length=1024, truncation=False, padding="max_length")
     #translated_tokens = model.generate(**batch, decoder_start_token_id=tokenizer.lang_code_to_id["de_DE"])
     
-    batch: dict = tokenizer.prepare_seq2seq_batch(src_texts=[TXT, TXT2], src_lang="de_DE", max_length=128, truncation=False, padding="max_length", return_tensors="pt")
+    batch: dict = tokenizer.prepare_seq2seq_batch(src_texts=[TXT, TXT2], src_lang="de_DE", max_length=2048, truncation=False, padding="max_length", return_tensors="pt")
     translated_tokens = model.generate(**batch, decoder_start_token_id=tokenizer.lang_code_to_id["en_XX"])
     translation = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
     print(translation)

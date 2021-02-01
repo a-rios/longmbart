@@ -50,7 +50,7 @@ class LongformerSelfAttentionForBart(nn.Module):
         hidden_states: Tensor, # shape (batch_size, q_len, model_size)
         key_value_states: Optional[Tensor] = None, # cross-attention in transformers.models.mbart.modeling_mbart
         past_key_value: Optional[Tuple[Tensor]] = None, # only for decoder
-        attention_mask: Optional[Tensor] = None, # shape (batch_size, 1, q_len, k_len) -> used to be key_padding_mask, attn_mask is now decoder_attention_mask (= autoregressive mask). 
+        attention_mask: Optional[Tensor] = None, # shape (batch_size, k_len) -> changed in transformers.models.modeling_mbart.MBartEncoder and MBartEncoderLayer (new mask uses bool -> global attention positions are lost, need to use the inverted orignal mask
         layer_head_mask: Optional[Tensor] = None, # head dropout?
         output_attentions: bool = False
     ) -> Tuple[Tensor, Optional[Tensor]]:
@@ -58,8 +58,7 @@ class LongformerSelfAttentionForBart(nn.Module):
         bsz, tgt_len, embed_dim = hidden_states.size()
         assert embed_dim == self.embed_dim
         assert list(hidden_states.size()) == [bsz, tgt_len, embed_dim]
-        ## new attention mask is (batch_size, 1, q_len, k_len), last dim (k) is the same for all q's, need to remove q (torch.narrow) -> (batch_size, 1, k_len) for LongformerSelfAttention
-        attention_mask = narrow(input=attention_mask, dim=2, start=0, length=1) # shape (batch_size, 1, 1, key_len
+
         outputs = self.longformer_self_attn(
             hidden_states,
             attention_mask=attention_mask * -1, # shape (batch_size, 1, 1, key_len)
