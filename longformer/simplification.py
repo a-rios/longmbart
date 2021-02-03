@@ -12,7 +12,7 @@ from rouge_score import rouge_scorer
 import sacrebleu
 
 import pytorch_lightning as pl
-from pytorch_lightning.logging import TestTubeLogger
+from pytorch_lightning.loggers import TestTubeLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.overrides.data_parallel import LightningDistributedDataParallel
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
@@ -115,7 +115,6 @@ class Simplifier(pl.LightningModule):
         self.model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(self.args.from_pretrained, config=self.config)
         self.tokenizer = MBartTokenizer.from_pretrained(self.args.tokenizer, use_fast=True)
         self.model.config.decoder_start_token_id = self.tokenizer.lang_code_to_id[self.tgt_lang]
-        print("de_DE id ", self.model.config.decoder_start_token_id)
     
     def _set_config(self):
         self.config = MLongformerEncoderDecoderConfig.from_pretrained(self.args.from_pretrained)
@@ -175,7 +174,8 @@ class Simplifier(pl.LightningModule):
                             'input_size': batch[0].numel(),
                             'output_size': batch[1].numel(),
                             'mem': torch.cuda.memory_allocated(loss.device) / 1024 ** 3 if torch.cuda.is_available() else 0}
-        return {'loss': loss, 'log': tensorboard_logs}
+        self.log('train-loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=False)
+        return loss
 
     def validation_step(self, batch, batch_nb):
         for p in self.model.parameters():
@@ -211,6 +211,13 @@ class Simplifier(pl.LightningModule):
         with open(outfile, 'a') as f:
             for sample in generated_str:
                 f.write(sample + "\n")
+        self.log('vloss', vloss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('bleu', vloss.new_zeros(1) + bleu.score, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('rouge1', vloss.new_zeros(1) + rouge1, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('rouge2', vloss.new_zeros(1) + rouge2, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('rougeL', vloss.new_zeros(1) + rougel, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('rougeLsum', vloss.new_zeros(1) + rougelsum, on_step=False, on_epoch=True, prog_bar=True)
+        
         return {'vloss': vloss,
                 'rouge1': vloss.new_zeros(1) + rouge1,
                 'rouge2': vloss.new_zeros(1) + rouge2,
@@ -245,7 +252,7 @@ class Simplifier(pl.LightningModule):
             self.best_checkpoint = self.current_checkpoint
             print("New best checkpoint {}, with {} {}.".format(self.best_checkpoint, self.best_metric, self.args.early_stopping_metric))
         self.current_checkpoint +=1
-        return {'val_loss': logs['vloss'], 'log': logs, 'progress_bar': logs}
+        
 
     def test_step(self, batch, batch_nb):
         return self.validation_step(batch, batch_nb)
@@ -276,17 +283,14 @@ class Simplifier(pl.LightningModule):
                           num_workers=self.args.num_workers, sampler=sampler,
                           collate_fn=SimplificationDataset.collate_fn)
 
-    @pl.data_loader
     def train_dataloader(self):
         self.train_dataloader_object = self._get_dataloader(self.train_dataloader_object, 'train', is_train=True)
         return self.train_dataloader_object
 
-    @pl.data_loader
     def val_dataloader(self):
         self.val_dataloader_object = self._get_dataloader(self.val_dataloader_object, 'val', is_train=False)
         return self.val_dataloader_object
 
-    @pl.data_loader
     def test_dataloader(self):
         self.test_dataloader_object = self._get_dataloader(self.test_dataloader_object, 'test', is_train=False)
         return self.test_dataloader_object
@@ -336,7 +340,7 @@ class Simplifier(pl.LightningModule):
         # Optimization params:
         #parser.add_argument("--warmup", type=int, default=1000, help="Number of warmup steps")
         parser.add_argument("--lr", type=float, default=0.00003, help="Initial learning rate")
-        parser.add_argument("--val_every", type=float, default=1.0, help="Number of training steps between validations")
+        parser.add_argument("--val_every", type=float, default=1.0, help="Number of training steps between validations in percent of an epoch.")
         parser.add_argument("--val_percent_check", default=1.00, type=float, help='Percent of validation data used')
         parser.add_argument("--max_epochs", type=int, default=100000, help="Maximum number of epochs (will stop training even if patience for early stopping has not been reached).")
         parser.add_argument("--early_stopping_metric", type=str, default='rougeL', help="Metric to be used for early stopping: vloss, rouge1, rouge2, rougeL, rougeLsum, bleu")
@@ -352,7 +356,7 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--test_percent_check", default=1.00, type=float, help='Percent of test data used')
         
         #logging params
-        parser.add_argument("--no_progress_bar", action='store_true', help="no progress bar. Good for printing")
+        parser.add_argument("--progress_bar_refresh_rate", type=int, default=0, help="How often to refresh progress bar (in steps). Value 0 disables progress bar.")
         parser.add_argument("--fp32", action='store_true', help="default is fp16. Use --fp32 to switch to fp32")
         parser.add_argument("--debug", action='store_true', help="debug run")
         parser.add_argument("--print_params", action='store_true', help="Print parameter names and shapes.")
@@ -400,7 +404,6 @@ def main(args):
                         verbose=True,
                         monitor=args.early_stopping_metric,
                         mode=model.lr_mode,
-                        period=-1,
                         prefix='')
 
     trainer = pl.Trainer(gpus=args.gpus, distributed_backend='ddp' if torch.cuda.is_available() else None,
@@ -412,12 +415,12 @@ def main(args):
                          val_check_interval=args.val_every if not args.debug else 1,
                          num_sanity_val_steps=args.num_sanity_val_steps,
                          check_val_every_n_epoch=1 if not (args.debug) else 1,
-                         val_percent_check=args.val_percent_check,
-                         test_percent_check=args.test_percent_check,
+                         limit_val_batches=args.val_percent_check,
+                         limit_test_batches=args.test_percent_check,
                          logger=logger,
                          checkpoint_callback=checkpoint_callback if not args.disable_checkpointing else False,
-                         show_progress_bar=not args.no_progress_bar,
-                         use_amp=not args.fp32, amp_level='O2',
+                         progress_bar_refresh_rate=args.progress_bar_refresh_rate,
+                         precision=32 if args.fp32 else 16, amp_level='O2',
                          resume_from_checkpoint=args.resume_ckpt,
                          callbacks=[early_stop_callback]
                          )

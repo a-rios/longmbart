@@ -12,7 +12,7 @@ from rouge_score import rouge_scorer
 import sacrebleu
 
 import pytorch_lightning as pl
-from pytorch_lightning.logging import TestTubeLogger
+from pytorch_lightning.loggers import TestTubeLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.overrides.data_parallel import LightningDistributedDataParallel
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
@@ -182,7 +182,6 @@ class InferenceSimplifier(pl.LightningModule):
                           num_workers=self.args.num_workers, sampler=sampler,
                           collate_fn=SimplificationDatasetForInference.collate_fn)
 
-    @pl.data_loader
     def test_dataloader(self):
         self.test_dataloader_object = self._get_dataloader(self.test_dataloader_object, 'test', is_train=False)
         return self.test_dataloader_object
@@ -219,7 +218,7 @@ class InferenceSimplifier(pl.LightningModule):
         parser.add_argument("--test_percent_check", default=1.00, type=float, help='Percent of test data used')
         
         #logging params
-        parser.add_argument("--no_progress_bar", action='store_true', help="no progress bar. Good for printing")
+        parser.add_argument("--progress_bar_refresh_rate", type=int, default=0, help="How often to refresh progress bar (in steps). Value 0 disables progress bar.")
         parser.add_argument("--fp32", action='store_true', help="default is fp16. Use --fp32 to switch to fp32")
         parser.add_argument("--print_params", action='store_true', help="Print parameter names and shapes.")
         
@@ -255,10 +254,10 @@ def main(args):
 
     trainer = pl.Trainer(gpus=args.gpus, distributed_backend='ddp' if torch.cuda.is_available() else None,
                          replace_sampler_ddp=False,
-                         test_percent_check=args.test_percent_check,
+                         limit_test_batches=args.test_percent_check,
                          logger=logger,
-                         show_progress_bar=not args.no_progress_bar,
-                         use_amp=not args.fp32, amp_level='O2'
+                         progress_bar_refresh_rate=args.progress_bar_refresh_rate,
+                         precision=32 if args.fp32 else 16, amp_level='O2'
                          )
     trainer.test(simplifier)
 
