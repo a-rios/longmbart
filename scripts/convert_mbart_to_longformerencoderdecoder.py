@@ -2,6 +2,9 @@ import argparse
 import logging
 import os
 import copy
+from collections import defaultdict
+import sentencepiece.sentencepiece_model_pb2 as pb2
+import sentencepiece as spm
 
 from transformers import MBartTokenizer
 
@@ -9,6 +12,8 @@ from transformers import MBartForConditionalGeneration
 from transformers.models.mbart.modeling_mbart import shift_tokens_right
 from longformer.longformer_encoder_decoder import LongformerSelfAttentionForBart
 from longformer.longformer_encoder_decoder_mbart import MLongformerEncoderDecoderForConditionalGeneration, MLongformerEncoderDecoderConfig
+from longformer.sliding_chunks import pad_to_window_size
+
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -20,12 +25,20 @@ def create_long_model(
     tokenizer_name_or_path,
     attention_window,
     max_pos,
-    cache_dir
+    cache_dir,
+    reduce_to_vocab,
+    print_params
 ):
     model = MBartForConditionalGeneration.from_pretrained(pretrained_model_name_or_path=base_model, cache_dir=cache_dir)
     tokenizer = MBartTokenizer.from_pretrained(tokenizer_name_or_path, model_max_length=max_pos, cache_dir=cache_dir)
     config = MLongformerEncoderDecoderConfig.from_pretrained(base_model, cache_dir=cache_dir)
     model.config = config
+
+    if print_params:
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                print(name + ":" + str(param.data.shape))
+        exit(0)
 
     # in BART attention_probs_dropout_prob is attention_dropout, but LongformerSelfAttention
     # expects attention_probs_dropout_prob, so set it here
@@ -53,7 +66,105 @@ def create_long_model(
         new_encoder_pos_embed[k:(k + step)] = model.model.encoder.embed_positions.weight[2:]
         k += step
     model.model.encoder.embed_positions.weight.data = new_encoder_pos_embed
+
+    ## reduce vocabulary of >250k to vocab given in reduce_to_vocab
+    ## embedding matrix is model.shared.weight:torch.Size([250027, 1024])
+    original_embed_weight = model.model.shared.weight
+    original_vocab_size, model_size = original_embed_weight.shape
     
+    if reduce_to_vocab is not None:
+        with open(reduce_to_vocab, 'r') as f:
+            keep_pieces = defaultdict()
+            for piece in f.readlines():
+                # check if this piece is actually in the spm vocab (some junk might not be)
+                if tokenizer.sp_model.piece_to_id(piece.rstrip()) > 0:
+                    keep_pieces[piece.rstrip()] = 1
+                    #print(piece)
+                #print(keep_pieces)
+
+            ##TODO clean up pieces vocabulary more
+            num_special_tokens = 4 # <unk>, <s>, </s> <pad>
+            new_vocab_size = len(keep_pieces) +num_special_tokens + len(tokenizer.lang_code_to_id) + tokenizer.fairseq_offset + 1 # for mask token
+            new_embed_weight = model.model.shared.weight.new_empty(new_vocab_size, model_size)
+            ## need to reduce final_logits_bias too
+            final_logits_bias_original = model.final_logits_bias.transpose(0,1) # (1, vocab_size)
+            final_logits_bias_new = final_logits_bias_original.new_empty(new_vocab_size,1)
+
+            ## keep order same as in original vocab.. iterate over 250k entries
+            added_vocab_length = len(tokenizer.lang_code_to_id) + tokenizer.fairseq_offset + 1
+            base_vocab_length_original = original_vocab_size - added_vocab_length
+            base_vocab_length_new = len(keep_pieces) + num_special_tokens
+
+            ## delete ununsed entries from sentencepiece model of the tokenizer and save the new ModelProto
+            pb2_model = pb2.ModelProto()
+            pb2_model.ParseFromString(open(os.path.join(cache_dir, "sentencepiece.bpe.model"), 'rb').read())
+            indices_to_remove = []
+            count=0
+
+            ## from transformers.tokenization_xlm_roberta.py -> self.fairseq_tokens_to_ids = {"<s>": 0, "<pad>": 1, "</s>": 2, "<unk>": 3}
+            ## sentencepiece model: 0 = <unk>, 1 = <s>, 2 = </s> -> need to copy first 4 rows in embedding matrix and then shift spm ids by +1
+            for i in range(0,4):
+                piece_embed = original_embed_weight[i]
+                piece_final_logits_bias = final_logits_bias_original[i]
+                new_embed_weight[i] = piece_embed
+                final_logits_bias_new[i] = piece_final_logits_bias
+
+            new_embed_iter = 4
+            for embed_iter, spm_iter in zip(range(4,base_vocab_length_original), range(3,base_vocab_length_original-1)): # full vocab size with (!) the added tokens, 250027 | 
+
+                if new_embed_iter > base_vocab_length_new:
+                    print("ran out of space at position {} in new matrix with vocab size {}".format(j, base_vocab_length_new))
+                    exit(0)
+
+                piece = pb2_model.pieces[spm_iter].piece
+                #print("embed iter: {}, spm iter {}, piece {}".format(embed_iter, spm_iter, piece))
+                if piece in keep_pieces.keys():
+                    count +=1
+                    ### get embedding
+                    piece_embed = original_embed_weight[embed_iter]
+                    piece_final_logits_bias = final_logits_bias_original[embed_iter]
+                    new_embed_weight[new_embed_iter] = piece_embed
+                    final_logits_bias_new[new_embed_iter] = piece_final_logits_bias
+                    #print("id : {}, piece {} ".format(new_embed_iter, piece))
+                    new_embed_iter +=1
+                else:
+                    indices_to_remove.append(spm_iter)
+                    #print(piece)
+
+            ##total count matched  59586
+            ##len vocabs to keep  59586 + special tokens 4
+            ##new vocab size  59617
+            print("total count matched ", count) #
+            print("len vocabs to keep {} + special tokens {}".format(len(keep_pieces.keys()), num_special_tokens))
+            print("new vocab size ", new_vocab_size)
+
+            # check ids in reduced spm model
+            removed =0
+            for i in indices_to_remove:
+                position = i-removed
+                #print("deleting ", pb2_model.pieces[position].piece)
+                del pb2_model.pieces[position]
+                removed +=1
+
+            ## fill in additional vocab positions (language ids etc)
+            for i in range(1,added_vocab_length):
+                new_embed_weight[base_vocab_length_new+i] = original_embed_weight[base_vocab_length_original+i]
+                #print("position in new tensor ", base_vocab_length_new+i)
+                #print("position in old tensor ", base_vocab_length_original+i)
+                #print("embed ", new_embed_weight[base_vocab_length_new+i])
+
+            model.model.shared.weight.data = new_embed_weight
+            model.final_logits_bias.data = final_logits_bias_new.transpose(0,1) # swap dimensions back to (1, vocab_size
+
+            with open(os.path.join(save_model_to, 'reduced.spm.model'), 'wb') as f:
+                f.write(pb2_model.SerializeToString())
+
+            tokenizer.init_kwargs['vocab_file'] = os.path.join(save_model_to, "reduced.spm.model")
+            tokenizer.vocab_file = os.path.join(save_model_to, "reduced.spm.model")
+            tokenizer.save_vocabulary(save_model_to)
+            #print("saving tokenizer with len ", len(tokenizer.sp_model))
+            #tokenizer.save_pretrained(save_model_to)
+            config.vocab_size = new_vocab_size
 
     # allocate a larger position embedding matrix for the decoder
     # new_decoder_pos_embed = model.model.decoder.embed_positions.weight.new_empty(max_pos, embed_size)
@@ -86,7 +197,9 @@ def create_long_model(
     
     logger.info(f'saving model to {save_model_to}')
     model.save_pretrained(save_model_to)
+    print("saving tokenizer")
     tokenizer.save_pretrained(save_model_to)
+    #print(model)
     return model, tokenizer
 
 
@@ -122,13 +235,19 @@ def main():
         default=4096 * 4,
         help='maximum encoder positions'
     )
-    
     parser.add_argument(
         '--cache_dir',
         type=str,
         help='where to save original model'
     )
-
+    parser.add_argument(
+        '--reduce-to-vocab',
+        type=str,
+        help='List of subword entries to keep in new model (one token per line).'
+    )
+    parser.add_argument("--print-params",
+                        action='store_true',
+                        help="Print parameter names and shapes.")
     args = parser.parse_args()
 
     if not os.path.exists(args.save_model_to):
@@ -140,32 +259,25 @@ def main():
         tokenizer_name_or_path=args.tokenizer_name_or_path,
         attention_window=args.attention_window,
         max_pos=args.max_pos,
-        cache_dir=args.cache_dir
+        cache_dir=args.cache_dir,
+        reduce_to_vocab=args.reduce_to_vocab,
+        print_params=args.print_params
     )
-
     tokenizer = MBartTokenizer.from_pretrained(args.save_model_to)
+    print("loaded tokenizer with len ", len(tokenizer.sp_model))
+
     #TXT = "My friends are <mask> but they eat too many carbs."
     #TXT = "My friends are fine but they eat too many carbs."
     TXT = "Das ist ein Test."
-    TXT2 = "Noch ein Test."
+    print("string in pieces ", tokenizer.sp_model.encode(TXT, out_type=str))
+    print("string in ids ", tokenizer.sp_model.encode(TXT, out_type=int))
+    #TXT2 = "Noch ein Test."
     model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.save_model_to)
     model.model.encoder.config.gradient_checkpointing = True
     model.model.decoder.config.gradient_checkpointing = True
-    #data = tokenizer([TXT], return_tensors='pt', padding='max_length', max_length=2048)
-    #input_ids = data['input_ids']
-    #attention_mask = data['attention_mask']
-    #decoder_input_ids = shift_tokens_right(input_ids[:, :5], tokenizer.pad_token_id)
-    #logits = model(input_ids, attention_mask=attention_mask, decoder_input_ids=decoder_input_ids, use_cache=False)[0]
-    #masked_index = (input_ids[0] == tokenizer.mask_token_id).nonzero(as_tuple=False).item()
-    #probs = logits[0, masked_index].softmax(dim=0)
-    #values, predictions = probs.topk(5)
-    #print(tokenizer.convert_ids_to_tokens(predictions))
-    
-    #batch = tokenizer.prepare_seq2seq_batch(src_texts=[TXT], src_lang="en_XX", max_length=1024, truncation=False, padding="max_length")
-    #translated_tokens = model.generate(**batch, decoder_start_token_id=tokenizer.lang_code_to_id["de_DE"])
-    
-    batch: dict = tokenizer.prepare_seq2seq_batch(src_texts=[TXT, TXT2], src_lang="de_DE", max_length=2048, truncation=False, padding="max_length", return_tensors="pt")
-    translated_tokens = model.generate(**batch, decoder_start_token_id=tokenizer.lang_code_to_id["en_XX"])
+
+    batch: dict = tokenizer.prepare_seq2seq_batch(src_texts=[TXT], src_lang="de_DE", max_length=2048, truncation=False, padding="max_length", return_tensors="pt")
+    translated_tokens = model.generate(**batch, decoder_start_token_id=tokenizer.lang_code_to_id["en_XX"], use_cache=True, num_beams=2)
     translation = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
     print(translation)
 
