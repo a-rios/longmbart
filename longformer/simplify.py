@@ -24,7 +24,7 @@ from longformer.sliding_chunks import pad_to_window_size
 import logging
 from transformers import MBartTokenizer
 from transformers import MBartForConditionalGeneration
-from transformers.models.bart.modeling_bart import shift_tokens_right
+from transformers.models.mbart.modeling_mbart import shift_tokens_right
 from longformer.longformer_encoder_decoder import LongformerSelfAttentionForBart
 from longformer.longformer_encoder_decoder_mbart import MLongformerEncoderDecoderForConditionalGeneration, MLongformerEncoderDecoderConfig
 import datasets
@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO)
 
 
 class SimplificationDatasetForInference(Dataset):
-    def __init__(self, inputs, reference, name, tokenizer, max_input_len, max_output_len, src_lang, tgt_lang):
+    def __init__(self, inputs, reference, name, tokenizer, max_input_len, max_output_len, src_lang, tgt_lang, tags_included, target_tags):
         self.inputs = inputs
         self.reference = reference
         self.name = name # train, val, test
@@ -49,6 +49,8 @@ class SimplificationDatasetForInference(Dataset):
         self.max_output_len = max_output_len
         self.src_lang = src_lang
         self.tgt_lang = tgt_lang
+        self.tags_included = tags_included
+        self.target_tags = target_tags
 
     def __len__(self):
         return len(self.inputs)
@@ -56,23 +58,28 @@ class SimplificationDatasetForInference(Dataset):
     def __getitem__(self, idx):
         source = self.inputs[idx]['text']
         reference = None
+        target_tags = None
         if self.reference is not None:
             reference = self.reference[idx]['text']
-        sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], src_lang=self.src_lang, tgt_lang=self.tgt_lang , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt") # TODO move this to _get_dataloader, preprocess everything at once? 
-        ## changed set_tgt_lang_special_tokens in transformers.tokenization_mbart to prefix the target id instead of adding it at the end. See https://arxiv.org/pdf/2001.08210.pdf, "A language id symbol <LID> is usedas the initial token to predict the sentence." 
+        if self.target_tags is not None:
+            target_tags = self.target_tags[idx]['text']
+        if self.tags_included is not None:
+            sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], tags_included=True , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt")
+        else:
+            sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], src_lang=self.src_lang, tgt_lang=self.tgt_lang , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt") # TODO move this to _get_dataloader, preprocess everything at once?
 
         input_ids = sample['input_ids'].squeeze()
       
-        return input_ids, reference
+        return input_ids, reference, target_tags
 
     @staticmethod
     def collate_fn(batch):
         
         pad_token_id = 1
     
-        input_ids, ref = list(zip(*batch))
+        input_ids, ref, target_tags = list(zip(*batch))
         input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=pad_token_id)
-        return input_ids, ref
+        return input_ids, ref, target_tags
 
 
 class InferenceSimplifier(pl.LightningModule):
@@ -81,8 +88,9 @@ class InferenceSimplifier(pl.LightningModule):
         super().__init__()
         self.args = args
        
-        self.src_lang = "de_DE"
-        self.tgt_lang = "de_DE" ## TODO make this more generic
+        self.src_lang = self.args.src_lang
+        self.tgt_lang = self.args.tgt_lang
+        self.tags_included = self.args.tags_included
         
         self.config = MLongformerEncoderDecoderConfig.from_pretrained(self.args.model_path)
         self.tokenizer = MBartTokenizer.from_pretrained(self.args.tokenizer, use_fast=True)
@@ -112,41 +120,59 @@ class InferenceSimplifier(pl.LightningModule):
         for p in self.model.parameters():
             p.requires_grad = False
 
-        input_ids, ref  = batch
+        input_ids, ref, tags  = batch
         input_ids, attention_mask = self._prepare_input(input_ids)
-        generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
-                                            use_cache=True, max_length=self.max_input_len,
-                                            num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_id=self.tokenizer.lang_code_to_id[self.tgt_lang]) # TODO: mBART source: X eso src_tag -> target: trg_tag X eos (no bos). Original fairseq: eos = language tag. Use </s> for fine-tuning or set eos_token_id to self.tokenizer.lang_code_to_id[self.tgt_lang]?
+        if self.tags_included:
+            assert (ref[0] is not None or tags[0] is not None), "Need either reference with target labels or list of target labels with --tags-included (multilingual batches)"
+            if  ref[0] is not None:
+                tgt_ids = [self.tokenizer.lang_code_to_id[sample.split(' ')[-1]]  for sample in ref ]
+            elif tags[0] is not None:
+                # get decoder_start_token_ids from file in target_tags
+                tgt_ids = [self.tokenizer.lang_code_to_id[sample.split(' ')[-1]]  for sample in tags ]
 
-        generated_str = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=True)
+            decoder_start_token_ids = torch.tensor(tgt_ids, dtype=input_ids.dtype, device=input_ids.device).unsqueeze(1)
+            generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
+                                            use_cache=True, max_length=self.args.max_output_len,
+                                            num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_ids=decoder_start_token_ids)
+        else:
+            generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
+                                            use_cache=True, max_length=self.max_input_len,
+                                            num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_id=self.tokenizer.lang_code_to_id[self.tgt_lang])
+
+        generated_strs = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=True)
         with open(self.args.translation, 'a') as f:
-            for sample in generated_str:
+            for sample in generated_strs:
                 f.write(sample + "\n")
         
         if self.args.test_target is not None:
-            gold_str = [ref[0]]
+            gold_strs = [r for r in ref]
+            if self.tags_included:
+                # remove tags from target text
+                print(gold_strs)
+                gold_strs = [' '.join(r.split(' ')[:-2]) for r in gold_strs]
+                print(gold_strs)  ## TODO fix
             scorer = rouge_scorer.RougeScorer(rouge_types=['rouge1', 'rouge2', 'rougeL', 'rougeLsum'], use_stemmer=False)
             rouge1 = rouge2 = rougel = rougelsum = 0.0
-            for ref, pred in zip(gold_str, generated_str):
+            for ref, pred in zip(gold_strs, generated_strs):
                 score = scorer.score(ref, pred)
                 rouge1 += score['rouge1'].fmeasure
                 rouge2 += score['rouge2'].fmeasure
                 rougel += score['rougeL'].fmeasure
                 rougelsum += score['rougeLsum'].fmeasure
-            rouge1 /= len(generated_str)
-            rouge2 /= len(generated_str)
-            rougel /= len(generated_str)
-            rougelsum /= len(generated_str)
-            bleu = sacrebleu.corpus_bleu(generated_str, [gold_str])
+            rouge1 /= len(generated_strs)
+            rouge2 /= len(generated_strs)
+            rougel /= len(generated_strs)
+            rougelsum /= len(generated_strs)
+            bleu = sacrebleu.corpus_bleu(generated_strs, [gold_strs])
         
             return {'rouge1': rouge1,
                     'rouge2': rouge2,
                     'rougeL': rougel,
                     'rougeLsum':  rougelsum, 
                     'bleu' :  bleu.score,
-                    'decoded' : generated_str}
+                    'decoded' : generated_strs}
         else:
-            return {'decoded' : generated_str}
+            return {'decoded' : generated_strs}
 
     def test_epoch_end(self, outputs):
         for p in self.model.parameters():
@@ -173,8 +199,11 @@ class InferenceSimplifier(pl.LightningModule):
         reference = None
         if self.args.test_target is not None:
             reference = self.datasets[split_name + "_target"]
+        target_tags = None
+        if self.args.target_tags is not None:
+            target_tags = self.datasets["target_tags"]
         dataset = SimplificationDatasetForInference(inputs=self.datasets[split_name + "_source"], reference=reference , name=split_name, tokenizer=self.tokenizer,
-                                       max_input_len=self.max_input_len, max_output_len=self.max_output_len, src_lang=self.src_lang, tgt_lang=self.tgt_lang)
+                                       max_input_len=self.max_input_len, max_output_len=self.max_output_len, src_lang=self.src_lang, tgt_lang=self.tgt_lang, tags_included=self.tags_included, target_tags=target_tags)
       
         sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=is_train) if self.trainer.use_ddp else None
 
@@ -204,6 +233,10 @@ class InferenceSimplifier(pl.LightningModule):
         #data
         parser.add_argument("--test_source", type=str, default=None, help="Path to the source test file.")
         parser.add_argument("--test_target", type=str, default=None, help="Path to the target test file (optional, if given, will output rouge and bleu).")
+        parser.add_argument("--target_tags", type=str, default=None, help="If test_target is not given: provide path to file with list of target tags (one per sample in test_source).")
+        parser.add_argument("--src_lang", type=str, default=None, help="Source language tag (optional, for multilingual batches, preprocess text files to include language tags.")
+        parser.add_argument("--tgt_lang", type=str, default=None, help="Target language tag (optional, for multilingual batches, preprocess text files to include language tags.")
+        parser.add_argument("--tags_included", action='store_true', help="Text files already contain special tokens (language tags and </s>. Source:  seq </s> src_tag, Target: seq </s> tgt_tag. Note: actual target sequence is tgt_tag seq </s>, but mBART's function shift_tokens_right will shift tokens to the correct order.")
         parser.add_argument("--max_input_len", type=int, default=256, help="maximum num of wordpieces, if unspecified, will use number of encoder positions from model config.")
         parser.add_argument("--max_output_len", type=int, default=512, help="maximum num of wordpieces, if unspecified, will use number of decoder positions from model config.")
         
@@ -244,8 +277,11 @@ def main(args):
     if args.test_target is not None:
         simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source, 'test_target': args.test_target })
     else:
-        simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source })
-    
+        if args.target_tags is not None:
+            simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source, 'target_tags': args.target_tags })
+        else:
+            simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source })
+
     logger = TestTubeLogger(
         save_dir=".",
         name="decode.log",

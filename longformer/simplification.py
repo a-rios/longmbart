@@ -57,7 +57,7 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=-100):
 
 
 class SimplificationDataset(Dataset):
-    def __init__(self, inputs, labels, name, tokenizer, max_input_len, max_output_len, src_lang, tgt_lang):
+    def __init__(self, inputs, labels, name, tokenizer, max_input_len, max_output_len, src_lang, tgt_lang, tags_included):
         self.inputs = inputs
         self.labels = labels
         self.name = name # train, val, test
@@ -66,6 +66,7 @@ class SimplificationDataset(Dataset):
         self.max_output_len = max_output_len
         self.src_lang = src_lang
         self.tgt_lang = tgt_lang
+        self.tags_included = tags_included
 
     def __len__(self):
         return len(self.inputs)
@@ -73,8 +74,10 @@ class SimplificationDataset(Dataset):
     def __getitem__(self, idx):
         source = self.inputs[idx]['text']
         target = self.labels[idx]['text'] 
-        sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], src_lang=self.src_lang, tgt_texts=[target], tgt_lang=self.tgt_lang , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt") # TODO move this to _get_dataloader, preprocess everything at once? 
-        ## changed set_tgt_lang_special_tokens in transformers.tokenization_mbart to prefix the target id instead of adding it at the end. See https://arxiv.org/pdf/2001.08210.pdf, "A language id symbol <LID> is usedas the initial token to predict the sentence." 
+        if self.tags_included:
+            sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], tgt_texts=[target], tags_included=True, max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt")
+        else:
+            sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], src_lang=self.src_lang, tgt_texts=[target], tgt_lang=self.tgt_lang , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt") # TODO move this to _get_dataloader, preprocess everything at once?
 
         input_ids = sample['input_ids'].squeeze()
         output_ids = sample['labels'].squeeze()
@@ -98,8 +101,9 @@ class Simplifier(pl.LightningModule):
         super().__init__()
         self.args = params
         self.hparams = params
-        self.src_lang = "de_DE"
-        self.tgt_lang = "de_DE" ## TODO make this more generic
+        self.src_lang = self.args.src_lang
+        self.tgt_lang = self.args.tgt_lang
+        self.tags_included = self.args.tags_included
         if self.args.from_pretrained is not None or args.resume_ckpt is not None: ## TODO check if this is true with resume_ckpt
             self._set_config()
             self._load_pretrained()
@@ -114,7 +118,10 @@ class Simplifier(pl.LightningModule):
     def _load_pretrained(self):
         self.model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(self.args.from_pretrained, config=self.config)
         self.tokenizer = MBartTokenizer.from_pretrained(self.args.tokenizer, use_fast=True)
-        self.model.config.decoder_start_token_id = self.tokenizer.lang_code_to_id[self.tgt_lang]
+        if self.tags_included:
+            self.model.config.decoder_start_token_id = -1
+        else:
+            self.model.config.decoder_start_token_id = self.tokenizer.lang_code_to_id[self.tgt_lang]
     
     def _set_config(self):
         self.config = MLongformerEncoderDecoderConfig.from_pretrained(self.args.from_pretrained)
@@ -142,9 +149,9 @@ class Simplifier(pl.LightningModule):
 
     def forward(self, input_ids, output_ids):
         input_ids, attention_mask = self._prepare_input(input_ids)
-        decoder_input_ids = shift_tokens_right(output_ids, self.config.pad_token_id) # (tgt_lang_id, output_ids, eos_token_id)
+        decoder_input_ids = shift_tokens_right(output_ids, self.config.pad_token_id) # (in: output_ids, eos_token_id, tgt_lang_id out: tgt_lang_id, output_ids, eos_token_id)
         labels = decoder_input_ids[:, 1:].clone()
-        decoder_input_ids = decoder_input_ids[:, :-1]
+        decoder_input_ids = decoder_input_ids[:, :-1] # without eos
         decoder_attention_mask = (decoder_input_ids != self.tokenizer.pad_token_id)
 
         outputs = self.model(
@@ -185,9 +192,18 @@ class Simplifier(pl.LightningModule):
         vloss = outputs[0]
         input_ids, output_ids = batch
         input_ids, attention_mask = self._prepare_input(input_ids)
-        generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
+        if self.tags_included:
+            # get list of target language tags
+            # output_ids (batch_size, seq_len), with padding
+            shifted = shift_tokens_right(output_ids, self.config.pad_token_id) # (in: output_ids, eos_token_id, tgt_lang_id out: tgt_lang_id, output_ids, eos_token_id)
+            decoder_start_token_ids = shifted.narrow(dim=1, start=0, length=1)
+            generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
                                             use_cache=True, max_length=self.args.max_output_len,
-                                            num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_id=self.tokenizer.lang_code_to_id[self.tgt_lang])  # TODO: mBART source: X eso src_tag -> target: trg_tag X eos (no bos). Original fairseq: eos = language tag. Use </s> for fine-tuning or set eos_token_id to self.tokenizer.lang_code_to_id[self.tgt_lang]?
+                                            num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_ids=decoder_start_token_ids)
+        else:
+            generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
+                                            use_cache=True, max_length=self.args.max_output_len,
+                                            num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_id=self.tokenizer.lang_code_to_id[self.tgt_lang])
 
         generated_str = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=True)
         
@@ -275,7 +291,7 @@ class Simplifier(pl.LightningModule):
             return current_dataloader
        
         dataset = SimplificationDataset(inputs=self.datasets[split_name + "_source"], labels=self.datasets[split_name + "_target"] , name=split_name, tokenizer=self.tokenizer,
-                                       max_input_len=self.args.max_input_len, max_output_len=self.args.max_output_len, src_lang=self.src_lang, tgt_lang=self.tgt_lang)
+                                       max_input_len=self.args.max_input_len, max_output_len=self.args.max_output_len, src_lang=self.src_lang, tgt_lang=self.tgt_lang, tags_included=args.tags_included)
       
         sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=is_train) if self.trainer.use_ddp else None
 
@@ -320,6 +336,9 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--val_target", type=str, default=None, help="Path to the target validation file.")
         parser.add_argument("--test_source", type=str, default=None, help="Path to the source test file (to evaluate after training is finished).")
         parser.add_argument("--test_target", type=str, default=None, help="Path to the target test file (to evaluate after training is finished).")
+        parser.add_argument("--src_lang", type=str, default=None, help="Source language tag (optional, for multilingual batches, preprocess text files to include language tags.")
+        parser.add_argument("--tgt_lang", type=str, default=None, help="Target language tag (optional, for multilingual batches, preprocess text files to include language tags.")
+        parser.add_argument("--tags_included", action='store_true', help="Text files already contain special tokens (language tags and </s>. Source:  seq </s> src_tag, Target: seq </s> tgt_tag. Note: actual target sequence is tgt_tag seq </s>, but mBART's function shift_tokens_right will shift tokens to the correct order.")
         parser.add_argument("--max_output_len", type=int, default=256, help="maximum num of wordpieces/summary. Used for training and testing")
         parser.add_argument("--max_input_len", type=int, default=512, help="maximum num of wordpieces/summary. Used for training and testing")
         
@@ -424,11 +443,10 @@ def main(args):
                          resume_from_checkpoint=args.resume_ckpt,
                          callbacks=[early_stop_callback]
                          )
-
-    trainer.fit(model)
     ## write config + tokenizer to save_dir
     model.model.save_pretrained(args.save_dir + "/" + args.save_prefix)
     model.tokenizer.save_pretrained(args.save_dir + "/" + args.save_prefix)
+    trainer.fit(model)
     print("Training ended. Best checkpoint {} with {} {}.".format(model.best_checkpoint, model.best_metric, args.early_stopping_metric))
     trainer.test(model)
 
