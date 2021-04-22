@@ -4,7 +4,8 @@ Pretrained mBART model from huggingface with `Longformer` windowed attention in 
 
 ### Installation
 
-```bash
+```
+    bash
     conda create --name longmbart python=3.8.5
     conda activate longmbart
     git clone https://github.com/ZurichNLP/longformer.git longmbart
@@ -17,7 +18,8 @@ Pretrained mBART model from huggingface with `Longformer` windowed attention in 
     
    To convert the huggingface mBART model, use scripts/convert_mbart_to_longformerencoderdecoder.py, for example:
    
-   ```python $longformer_dir/scripts/convert_mbart_to_longformerencoderdecoder.py \
+   ``` 
+   python $longformer_dir/scripts/convert_mbart_to_longformerencoderdecoder.py \
    --save_model_to path-to-save-new-model \
    --attention_window 512 \
    --reduce-to-vocab list-of-spm-pieces \
@@ -35,7 +37,8 @@ Pretrained mBART model from huggingface with `Longformer` windowed attention in 
    
  Example for fine-tuning (see `longformer/simplification.py` for all options):
    
-```python -m longformer.simplification \
+```
+python -m longformer.simplification \
 --from_pretrained path-to-converted-model \
 --tokenizer path-to-converted-model \
 --save_dir path-to-save-fine-tuned-model \
@@ -74,7 +77,8 @@ Early stopping on one of these metrics: vloss, rouge1, rouge2, rougeL, rougeLsum
 In a setting where translating from A to B, set `--src_lang A` and `--tgt_lang B` (input has no language tags), in a multilingual setting where source and target text already have language tags, use `--tags_included`. 
 
 To translate with a fine-tuned model, use `longformer/simplify.py`, for example like this:
-```python -m longformer.simplify \
+```
+python -m longformer.simplify \
 --model_path path-to-fine-tuned-model \
 --checkpoint "checkpointepoch=name-of-checkpoint" \
 --tokenizer path-to-fine-tuned-model \
