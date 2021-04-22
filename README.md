@@ -1,6 +1,6 @@
 # <p align=center>`MBart with Longformer windowed attention`</p>
 
-Pretrained mBART model from huggingface with `Longformer` windowed attention. 
+Pretrained mBART model from huggingface with `Longformer` windowed attention in encoder (decoder has standard attention).
 
 ### Installation
 
