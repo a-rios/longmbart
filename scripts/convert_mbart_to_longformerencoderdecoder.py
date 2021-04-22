@@ -252,11 +252,6 @@ def main():
         help='List of additional language tags (will replace tags given with --replace_tags and initialize with embeddings given with --initialize_tags).'
     )
     parser.add_argument(
-        '--replace_tags',
-        type=str, nargs='+',
-        help='List of language tags to replace with new tags given with --add_language_tags. Needs to be same number.'
-    )
-    parser.add_argument(
         '--initialize_tags',
         type=str, nargs='+',
         help='Initialize new language tags with embeddings of these tags.'
@@ -269,43 +264,65 @@ def main():
     if not os.path.exists(args.save_model_to):
         os.mkdir(args.save_model_to)
 
-    assert len(args.add_language_tags) == len(args.replace_tags) == len(args.initialize_tags), "Need same number of values for --add_language_tags, --replace_tags and --initialize_tags but got %i, %i and %i" %(len(args.add_language_tags), len(args.replace_tags), len(args.initialize_tags))
+    if args.add_language_tags is not None:
+        assert args.initialize_tags is not None, "Need --initialize_tags to add new language tags"
+        assert len(args.add_language_tags) == len(args.initialize_tags), "Need same number of values for --add_language_tags and --initialize_tags but got %i and %i" %(len(args.add_language_tags), len(args.initialize_tags))
 
-    #create_long_model(
-        #save_model_to=args.save_model_to,
-        #base_model=args.base_model,
-        #tokenizer_name_or_path=args.tokenizer_name_or_path,
-        #attention_window=args.attention_window,
-        #max_pos=args.max_pos,
-        #cache_dir=args.cache_dir,
-        #reduce_to_vocab=args.reduce_to_vocab,
-        #print_params=args.print_params
-    #)
+    create_long_model(
+        save_model_to=args.save_model_to,
+        base_model=args.base_model,
+        tokenizer_name_or_path=args.tokenizer_name_or_path,
+        attention_window=args.attention_window,
+        max_pos=args.max_pos,
+        cache_dir=args.cache_dir,
+        reduce_to_vocab=args.reduce_to_vocab,
+        print_params=args.print_params
+    )
     tokenizer = MBartTokenizer.from_pretrained(args.save_model_to)
+
     model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.save_model_to)
     print("loaded tokenizer with len ", len(tokenizer.sp_model))
 
-    # add new tags
-    for (new_tag, old_tag, init_tag) in zip(args.add_language_tags, args.replace_tags, args.initialize_tags):
-        old_tag_id = tokenizer.lang_code_to_id[old_tag]
-        print("old tag id ", old_tag_id)
-        init_tag_id = tokenizer.lang_code_to_id[init_tag]
-        print("init_tag_id ", init_tag_id)
-        init_embed = model.model.shared.weight[init_tag_id]
-        model.model.shared.weight[old_tag_id] = init_embed
+    if args.add_language_tags is not None:
+        embed_weight = model.model.shared.weight # (vocab, dim)
+        print(embed_weight.shape)
+        ## need to reduce final_logits_bias too
+        final_logits_bias = model.final_logits_bias.transpose(0,1) # (1, vocab_size)
 
-        tokenizer.lang_code_to_id[new_tag] = old_tag_id
-        del tokenizer.lang_code_to_id[old_tag]
-        tokenizer.id_to_lang_code[old_tag_id] = new_tag
+        print(tokenizer._additional_special_tokens)
+        print("tokenizer orig len ", tokenizer.vocab_size)
+        tokenizer.add_tokens(args.add_language_tags)
+        print("tokenizer len ", tokenizer.vocab_size)
 
+        for (new_tag, init_tag) in zip(args.add_language_tags, args.initialize_tags):
+            init_tag_id = tokenizer.lang_code_to_id[init_tag]
+            print("init_tag_id ", init_tag_id)
+            init_embed = model.model.shared.weight[init_tag_id].unsqueeze(0)
+            embed_weight = torch.cat((embed_weight, init_embed), dim=0)
+            init_bias = final_logits_bias[init_tag_id].unsqueeze(dim=0)
+            final_logits_bias = torch.cat((final_logits_bias, init_bias), dim=0)
+            print("added ", new_tag)
+            print(init_embed.shape)
+            print(embed_weight.shape)
+
+        model.final_logits_bias.data = final_logits_bias.transpose(0,1)
+        model.model.shared.weight.data = embed_weight
+        model.config.vocab_size = embed_weight.shape[0]
+
+        print("saving tokenizer with new tags")
+        tokenizer.save_pretrained(args.save_model_to)
+        print("saving model with new tags")
+        model.save_pretrained(args.save_model_to)
+
+    print(tokenizer.special_tokens_map)
     print(tokenizer.id_to_lang_code)
     print(tokenizer.lang_code_to_id)
 
     ## check embeddings
-    print("de_DE embed ", model.model.shared.weight[tokenizer.lang_code_to_id["de_DE"]])
-    print("de_A1 embed ", model.model.shared.weight[tokenizer.lang_code_to_id["de_A1"]])
-    print("de_A2 embed ", model.model.shared.weight[tokenizer.lang_code_to_id["de_A2"]])
-    print("de_B1 embed ", model.model.shared.weight[tokenizer.lang_code_to_id["de_B1"]])
+    #print("de_DE embed ", model.model.shared.weight[tokenizer.convert_tokens_to_ids("de_DE")])
+    #print("de_A1 embed ", model.model.shared.weight[tokenizer.convert_tokens_to_ids("de_A1")])
+    #print("de_A2 embed ", model.model.shared.weight[tokenizer.convert_tokens_to_ids("de_A2")])
+    #print("de_B1 embed ", model.model.shared.weight[tokenizer.convert_tokens_to_ids("de_B1")])
 
     TXT = "Das ist ein Test. </s> de_DE"
     TXT2 = "Noch ein Test. </s> de_DE"
@@ -330,7 +347,6 @@ def main():
     #translated_tokens = model.generate(**batch, decoder_start_token_id=tokenizer.lang_code_to_id["es_XX"], use_cache=True, num_beams=2)
     #translation = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
     #print(translation)
-
 
 if __name__ == "__main__":
     main()
