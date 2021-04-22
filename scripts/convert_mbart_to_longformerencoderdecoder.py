@@ -324,24 +324,24 @@ def main():
     #print("de_A2 embed ", model.model.shared.weight[tokenizer.convert_tokens_to_ids("de_A2")])
     #print("de_B1 embed ", model.model.shared.weight[tokenizer.convert_tokens_to_ids("de_B1")])
 
-    TXT = "Das ist ein Test. </s> de_DE"
-    TXT2 = "Noch ein Test. </s> de_DE"
-    #print("string in pieces ", tokenizer.sp_model.encode(TXT, out_type=str))
-    #print("string in ids ", tokenizer.sp_model.encode(TXT, out_type=int))
-    TXT3 = "en_XX this is a test. </s> en_XX"
-    TXT4 = "es_XX otro ejemplo </s> es_XX"
+    # TXT = "Das ist ein Test. </s> de_DE"
+    # TXT2 = "Noch ein Test. </s> de_DE"
+    # #print("string in pieces ", tokenizer.sp_model.encode(TXT, out_type=str))
+    # #print("string in ids ", tokenizer.sp_model.encode(TXT, out_type=int))
+    # TXT3 = "en_XX this is a test. </s> en_XX"
+    # TXT4 = "es_XX otro ejemplo </s> es_XX"
 
-    ## input = sequence X </s> src_lang, label = sequence tgt_lang X </s> tgt_lang
-    tgt_texts = [TXT3, TXT4]
-    batch: dict = tokenizer.prepare_seq2seq_batch(src_texts=[TXT, TXT2], max_length=2048, truncation=False, padding="max_length", return_tensors="pt", tags_included=True)
-    print(batch)
-    #decoder_start_token_ids = [ tokenizer.lang_code_to_id[sample.split(' ')[-1]] for sample in tgt_texts]
-    decoder_start_token_ids = [tokenizer.lang_code_to_id["de_A1"], tokenizer.lang_code_to_id["de_B1"]]
-    decoder_start_token_ids = torch.tensor(decoder_start_token_ids)
-    print(decoder_start_token_ids)
-    translated_tokens = model.generate(**batch, decoder_start_token_ids=decoder_start_token_ids, use_cache=True, num_beams=2)
-    translation = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
-    print(translation)
+    # ## input = sequence X </s> src_lang, label = sequence tgt_lang X </s> tgt_lang
+    # tgt_texts = [TXT3, TXT4]
+    # batch: dict = tokenizer.prepare_seq2seq_batch(src_texts=[TXT, TXT2], max_length=2048, truncation=False, padding="max_length", return_tensors="pt", tags_included=True)
+    # print(batch)
+    # #decoder_start_token_ids = [ tokenizer.lang_code_to_id[sample.split(' ')[-1]] for sample in tgt_texts]
+    # decoder_start_token_ids = [tokenizer.lang_code_to_id["de_A1"], tokenizer.lang_code_to_id["de_B1"]]
+    # decoder_start_token_ids = torch.tensor(decoder_start_token_ids)
+    # print(decoder_start_token_ids)
+    # translated_tokens = model.generate(**batch, decoder_start_token_ids=decoder_start_token_ids, use_cache=True, num_beams=2)
+    # translation = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
+    # print(translation)
 
     #batch: dict = tokenizer.prepare_seq2seq_batch(src_texts=[TXT, TXT2], src_lang="de_DE", max_length=2048, truncation=False, padding="max_length", return_tensors="pt",  tags_included=True)
     #translated_tokens = model.generate(**batch, decoder_start_token_id=tokenizer.lang_code_to_id["es_XX"], use_cache=True, num_beams=2)
