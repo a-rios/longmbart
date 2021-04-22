@@ -27,8 +27,8 @@ python -m longformer.simplification \
 --train_target $data/train.response \
 --val_source $data/valid.review \
 --val_target $data/valid.response \
---test_source $data/test/review \
---test_target $data/test/response \
+--test_source $data/test.review \
+--test_target $data/test.response \
 --src_lang de_DE --tgt_lang de_DE \
 --max_input_len $MAX_SRC_LEN --max_output_len $MAX_TGT_LEN \
 --batch_size 1 \
