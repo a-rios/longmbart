@@ -91,4 +91,4 @@ To translate with a fine-tuned model, use `longformer/simplify.py`, for example 
 --tags_included
 ```
 Reference file is optional, if given, will print evaluation metrics (rouge1, rouge2, rougeL, rougeLsum, bleu). 
-If only one target language, use `--tgt_lang` to set, if multiple languges, either give a reference file with tags (`target_sequence </s> tgt_lang`) with `--tags_included` or just a list of target tags with `--target_tags` (one tag per line for each sample in `--test_source`).
+If only one target language, use `--tgt_lang` to set, if multiple languages, either give a reference file with tags (`target_sequence </s> tgt_lang`) with `--tags_included` or just a list of target tags with `--target_tags` (one tag per line for each sample in `--test_source`).
