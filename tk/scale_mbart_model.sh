@@ -26,7 +26,7 @@ spm_pieces=$data/ml_vocab.txt
 
 python $workdir/scripts/convert_mbart_to_longformerencoderdecoder.py \
     --base_model facebook/mbart-large-cc25 \
-    --save_model_to $scratch/scaled_mbart \
+    --save_model_to $workdir/longmbart \
     --attention_window 512 \
     --reduce-to-vocab $spm_pieces \
     --cache_dir $scratch/hf4mbart \
