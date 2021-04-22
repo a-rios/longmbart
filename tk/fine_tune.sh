@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # -*- coding: utf-8 -*-
 
+set -e
 
 GPU=$1
 workdir=/srv/scratch6/kew/mbart/longmbart
 pretrained=$workdir/longmbart
 data=$workdir/dummy/de/raw
 save_dir=$workdir/dummy/de/finetuned/
-
-$data/train.review
 
 MAX_TGT_LEN=1024
 MAX_SRC_LEN=1024
