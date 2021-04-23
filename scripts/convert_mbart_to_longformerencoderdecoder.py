@@ -278,6 +278,9 @@ def main():
         reduce_to_vocab=args.reduce_to_vocab,
         print_params=args.print_params
     )
+
+    # print('saved model to {}'.format(args.save_model_to))
+
     tokenizer = MBartTokenizer.from_pretrained(args.save_model_to)
 
     model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.save_model_to)
@@ -324,12 +327,12 @@ def main():
     #print("de_A2 embed ", model.model.shared.weight[tokenizer.convert_tokens_to_ids("de_A2")])
     #print("de_B1 embed ", model.model.shared.weight[tokenizer.convert_tokens_to_ids("de_B1")])
 
-    # TXT = "Das ist ein Test. </s> de_DE"
-    # TXT2 = "Noch ein Test. </s> de_DE"
-    # #print("string in pieces ", tokenizer.sp_model.encode(TXT, out_type=str))
-    # #print("string in ids ", tokenizer.sp_model.encode(TXT, out_type=int))
-    # TXT3 = "en_XX this is a test. </s> en_XX"
-    # TXT4 = "es_XX otro ejemplo </s> es_XX"
+    TXT = "Das ist ein Test. </s> de_DE"
+    TXT2 = "Noch ein Test. </s> de_DE"
+    print("string in pieces ", tokenizer.sp_model.encode(TXT, out_type=str))
+    print("string in ids ", tokenizer.sp_model.encode(TXT, out_type=int))
+    TXT3 = "en_XX this is a test. </s> en_XX"
+    TXT4 = "es_XX otro ejemplo </s> es_XX"
 
     # ## input = sequence X </s> src_lang, label = sequence tgt_lang X </s> tgt_lang
     # tgt_texts = [TXT3, TXT4]

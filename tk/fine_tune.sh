@@ -4,10 +4,10 @@
 set -e
 
 GPU=$1
-workdir=/srv/scratch6/kew/mbart/longmbart
-pretrained=$workdir/longmbart
-data=$workdir/dummy/de/head10
-save_dir=$workdir/dummy/de/finetuned_on_head10/
+scratch=/srv/scratch6/kew/mbart/longmbart
+pretrained=$scratch/longmbart
+data=$scratch/dummy/de/raw/
+save_dir=$scratch/dummy/de/finetuned
 
 MAX_TGT_LEN=1024
 MAX_SRC_LEN=1024
@@ -17,6 +17,8 @@ if [[ -z $GPU ]]; then
 fi
 
 export CUDA_VISIBLE_DEVICES=$GPU
+
+echo "Running on GPU(s) $GPU"
 
 python -m longformer.simplification \
 --from_pretrained $pretrained \
@@ -32,7 +34,7 @@ python -m longformer.simplification \
 --tags_included \
 --max_input_len $MAX_SRC_LEN --max_output_len $MAX_TGT_LEN \
 --batch_size 1 \
---grad_accum 4 \
+--grad_accum 60 \
 --num_workers 5 \
 --gpus 1 \
 --seed 222 \
@@ -50,8 +52,7 @@ python -m longformer.simplification \
 --lr_reduce_patience 8 \
 --lr_reduce_factor 0.5 \
 --grad_ckpt \
---progress_bar_refresh_rate 10 \
---disable_checkpointing
+--progress_bar_refresh_rate 10
 
 # 
 # --src_lang de_DE --tgt_lang de_DE \

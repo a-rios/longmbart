@@ -3,6 +3,8 @@ transformers @ git+https://github.com/ZurichNLP/transformers.git@longmbart#egg=t
 torch==1.6.0
 tensorboardX
 test-tube==0.7.5
+nltk==3.5
+numpy==1.19.5
 nlp
 rouge_score
 requests
