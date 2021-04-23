@@ -33,7 +33,6 @@ Example call:
     --spm /srv/scratch6/kew/mbart/mbart.cc25.v2/sentence.bpe.model \
     --outfile /srv/scratch6/kew/mbart/dummy/ml_vocab.txt
 
-
 """
 
 import argparse

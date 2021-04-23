@@ -6,8 +6,8 @@ set -e
 GPU=$1
 workdir=/srv/scratch6/kew/mbart/longmbart
 pretrained=$workdir/longmbart
-data=$workdir/dummy/de/raw
-save_dir=$workdir/dummy/de/finetuned/
+data=$workdir/dummy/de/head10
+save_dir=$workdir/dummy/de/finetuned_on_head10/
 
 MAX_TGT_LEN=1024
 MAX_SRC_LEN=1024
