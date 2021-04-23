@@ -188,6 +188,8 @@ class Simplifier(pl.LightningModule):
         for p in self.model.parameters():
             p.requires_grad = False
 
+        # breakpoint()
+
         outputs = self.forward(*batch)
         vloss = outputs[0]
         input_ids, output_ids = batch
@@ -207,6 +209,8 @@ class Simplifier(pl.LightningModule):
 
         generated_str = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=True)
         
+        print(generated_str)
+
         gold_str = self.tokenizer.batch_decode(output_ids.tolist(), skip_special_tokens=True, clean_up_tokenization_spaces=True)
         scorer = rouge_scorer.RougeScorer(rouge_types=['rouge1', 'rouge2', 'rougeL', 'rougeLsum'], use_stemmer=False)
         rouge1 = rouge2 = rougel = rougelsum = 0.0
@@ -243,6 +247,7 @@ class Simplifier(pl.LightningModule):
                 'decoded' : generated_str}
 
     def validation_epoch_end(self, outputs):
+        
         for p in self.model.parameters():
             p.requires_grad = True
 

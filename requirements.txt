@@ -5,6 +5,7 @@ tensorboardX
 test-tube==0.7.5
 nlp
 rouge_score
+requests
 sacrebleu
-datasets
-sentencepiece
+datasets==1.2.1
+sentencepiece==0.1.95
