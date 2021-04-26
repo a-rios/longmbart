@@ -3,7 +3,7 @@
 
 
 GPU=$1
-scratch=/srv/scratch6/kew/mbart/longmbart
+scratch=/srv/scratch6/kew/mbart/longmbart 
 data=$scratch/dummy/de/raw/
 finetuned=$scratch/dummy/de/finetuned/w512/
 outdir=$finetuned/inference/
@@ -18,9 +18,9 @@ mkdir -p $outdir
 
 python -m longformer.simplify \
     --model_path $finetuned \
-    --checkpoint "checkpointepoch=02_rougeL=0.00000.ckpt" \
+    --checkpoint "checkpointepoch=08_rougeL=0.29971.ckpt" \
     --tokenizer $finetuned \
-    --translation $outdir/chkpt_E02.txt \
+    --translation $outdir/chkpt_E08.txt \
     --test_source $data/test.review_tagged \
     --test_target $data/test.response_tagged \
     --max_output_len 512 \
