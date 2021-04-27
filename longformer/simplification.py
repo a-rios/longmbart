@@ -415,7 +415,8 @@ def main(args):
     print(args)
 
     model.lr_mode='max'
-    if args.early_stopping_metric == 'val_loss':
+    # if args.early_stopping_metric == 'val_loss':
+    if args.early_stopping_metric == 'vloss':
         model.lr_mode='min'
     early_stop_callback = EarlyStopping(monitor=args.early_stopping_metric, min_delta=0.00, patience=args.patience, verbose=True, mode=model.lr_mode) # metrics: val_loss, bleu, rougeL
     
@@ -423,12 +424,12 @@ def main(args):
     custom_checkpoint_path += ':.5f}'
   
     checkpoint_callback = ModelCheckpoint(
-    filepath=os.path.join(args.save_dir, args.save_prefix, custom_checkpoint_path),
-                        save_top_k=5,
-                        verbose=True,
-                        monitor=args.early_stopping_metric,
-                        mode=model.lr_mode,
-                        prefix='')
+        filepath=os.path.join(args.save_dir, args.save_prefix, custom_checkpoint_path),
+        save_top_k=3,
+        verbose=True,
+        monitor=args.early_stopping_metric,
+        mode=model.lr_mode,
+        prefix='')
 
     trainer = pl.Trainer(gpus=args.gpus, distributed_backend='ddp' if torch.cuda.is_available() else None,
                          track_grad_norm=-1,

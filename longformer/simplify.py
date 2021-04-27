@@ -2,6 +2,8 @@ import os
 import argparse
 import random
 import numpy as np
+import json
+from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -120,6 +122,8 @@ class InferenceSimplifier(pl.LightningModule):
         for p in self.model.parameters():
             p.requires_grad = False
 
+
+
         input_ids, ref, tags  = batch
         input_ids, attention_mask = self._prepare_input(input_ids)
         if self.tags_included:
@@ -129,50 +133,105 @@ class InferenceSimplifier(pl.LightningModule):
             elif tags[0] is not None:
                 # get decoder_start_token_ids from file in target_tags
                 tgt_ids = [self.tokenizer.lang_code_to_id[sample.split(' ')[-1]]  for sample in tags ]
-
+            # breakpoint()
+            # TODO: check if inference with batch_size > 1
             decoder_start_token_ids = torch.tensor(tgt_ids, dtype=input_ids.dtype, device=input_ids.device).unsqueeze(1)
             generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
                                             use_cache=True, max_length=self.args.max_output_len,
-                                            num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_ids=decoder_start_token_ids)
+                                            num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_ids=decoder_start_token_ids,
+                                            do_sample=self.args.do_sample,
+                                            temperature=self.args.temperature,
+                                            top_k=self.args.top_k,
+                                            top_p=self.args.top_p,
+                                            repetition_penalty=self.args.repetition_penalty,
+                                            length_penalty=self.args.length_penalty,
+                                            num_return_sequences=self.args.num_return_sequences,
+                                            output_scores=True if self.args.output_to_json else self.args.output_scores,
+                                            return_dict_in_generate=True if self.args.output_to_json else self.args.return_dict_in_generate)
         else:
             generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
                                             use_cache=True, max_length=self.max_input_len,
-                                            num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_id=self.tokenizer.lang_code_to_id[self.tgt_lang])
+                                            num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_id=self.tokenizer.lang_code_to_id[self.tgt_lang],
+                                            do_sample=self.args.do_sample,
+                                            temperature=self.args.temperature,
+                                            top_k=self.args.top_k,
+                                            top_p=self.args.top_p,
+                                            repetition_penalty=self.args.repetition_penalty,
+                                            length_penalty=self.args.length_penalty,
+                                            num_return_sequences=self.args.num_return_sequences,
+                                            output_scores=True if self.args.output_to_json else self.args.output_scores,
+                                            return_dict_in_generate=True if self.args.output_to_json else self.args.return_dict_in_generate)
 
-        generated_strs = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=True)
-        with open(self.args.translation, 'a') as f:
-            for sample in generated_strs:
-                f.write(sample + "\n")
-        
-        if self.args.test_target is not None:
-            gold_strs = [r for r in ref]
-            if self.tags_included:
-                # remove tags from target text
-                print(gold_strs)
-                gold_strs = [' '.join(r.split(' ')[:-2]) for r in gold_strs]
-                print(gold_strs)  ## TODO fix
-            scorer = rouge_scorer.RougeScorer(rouge_types=['rouge1', 'rouge2', 'rougeL', 'rougeLsum'], use_stemmer=False)
-            rouge1 = rouge2 = rougel = rougelsum = 0.0
-            for ref, pred in zip(gold_strs, generated_strs):
-                score = scorer.score(ref, pred)
-                rouge1 += score['rouge1'].fmeasure
-                rouge2 += score['rouge2'].fmeasure
-                rougel += score['rougeL'].fmeasure
-                rougelsum += score['rougeLsum'].fmeasure
-            rouge1 /= len(generated_strs)
-            rouge2 /= len(generated_strs)
-            rougel /= len(generated_strs)
-            rougelsum /= len(generated_strs)
-            bleu = sacrebleu.corpus_bleu(generated_strs, [gold_strs])
-        
-            return {'rouge1': rouge1,
-                    'rouge2': rouge2,
-                    'rougeL': rougel,
-                    'rougeLsum':  rougelsum, 
-                    'bleu' :  bleu.score,
-                    'decoded' : generated_strs}
+        # breakpoint()
+        if not self.args.output_to_json:
+
+            generated_strs = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=True)
+            with open(self.args.translation, 'a') as f:
+                for sample in generated_strs:
+                    f.write(sample + "\n")
+            
+            if self.args.test_target is not None:
+                gold_strs = [r for r in ref]
+                if self.tags_included:
+                    # remove tags from target text
+                    print(gold_strs)
+                    gold_strs = [' '.join(r.split(' ')[:-2]) for r in gold_strs]
+                    print(gold_strs)  ## TODO fix
+                scorer = rouge_scorer.RougeScorer(rouge_types=['rouge1', 'rouge2', 'rougeL', 'rougeLsum'], use_stemmer=False)
+                rouge1 = rouge2 = rougel = rougelsum = 0.0
+                for ref, pred in zip(gold_strs, generated_strs):
+                    score = scorer.score(ref, pred)
+                    rouge1 += score['rouge1'].fmeasure
+                    rouge2 += score['rouge2'].fmeasure
+                    rougel += score['rougeL'].fmeasure
+                    rougelsum += score['rougeLsum'].fmeasure
+                rouge1 /= len(generated_strs)
+                rouge2 /= len(generated_strs)
+                rougel /= len(generated_strs)
+                rougelsum /= len(generated_strs)
+                bleu = sacrebleu.corpus_bleu(generated_strs, [gold_strs])
+            
+                return {'rouge1': rouge1,
+                        'rouge2': rouge2,
+                        'rougeL': rougel,
+                        'rougeLsum':  rougelsum, 
+                        'bleu' :  bleu.score,
+                        'decoded' : generated_strs}
+            else:
+                return {'decoded' : generated_strs}
+
         else:
-            return {'decoded' : generated_strs}
+            # breakpoint()
+            # NOTE: modify for inference with self.args.batch_size > 1:
+            batch_hyps = self.tokenizer.batch_decode(generated_ids.sequences.tolist(), skip_special_tokens=True)
+            batch_scores = generated_ids.sequences_scores.tolist()
+            batch_source_strs = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=True)
+
+            for batch_i in range(self.args.batch_size):
+                src_str = batch_source_strs[batch_i]
+                if self.args.test_target:
+                    ref_str = ' '.join(ref[batch_i].split(' ')[:-2]) if self.tags_included else ref[batch_i]
+                else:
+                    ref_str = None
+
+                hyps = batch_hyps[batch_i:batch_i+self.args.batch_size]
+                scores = batch_scores[batch_i:batch_i+self.args.batch_size]
+
+                output_dict = {
+                    'src': src_str,
+                    'ref': ref_str,
+                    'hyps': [],
+                    }
+                # output hyps don't appear to be sorted by
+                # overall probability scores.
+                scored_hyps = {score: hyp for score, hyp in zip(scores, hyps)}
+                for score in sorted(scored_hyps.keys(), reverse=True): # sort according to NLL (smaller = better)
+                    output_dict['hyps'].append({'score': score, 'hyp': scored_hyps[score]})
+
+                json_line = json.dumps(output_dict, ensure_ascii=False)
+                with open(self.args.translation, 'a') as f:
+                    f.write(json_line+"\n")
+
 
     def test_epoch_end(self, outputs):
         for p in self.model.parameters():
@@ -250,6 +309,23 @@ class InferenceSimplifier(pl.LightningModule):
         parser.add_argument("--beam_size", type=int, default=4, help="Beam size for inference when testing/validating. Default: 4.")
         parser.add_argument("--test_percent_check", default=1.00, type=float, help='Percent of test data used')
         
+        parser.add_argument("--output_to_json", default=False, action="store_true", help='If true, decoding output is a verbose JSONL containing, src, tgt, and scored model output hyps')
+        
+
+        # decoding strategy params
+        # passed to model.generate() (in generation_utils.py)
+        parser.add_argument("--do_sample", default=False, action="store_true", help='')
+        parser.add_argument("--temperature", default=1.0, type=float, help='')
+        parser.add_argument("--top_k", default=50, type=int, help='')
+        parser.add_argument("--top_p", default=1.0, type=float, help='')
+        parser.add_argument("--repetition_penalty", default=1.0, type=float, help='')
+        parser.add_argument("--length_penalty", default=1.0, type=float, help='')
+        parser.add_argument("--output_scores", default=False, action="store_true", help='')
+        parser.add_argument("--num_return_sequences", default=1, type=int, help='')
+        parser.add_argument("--return_dict_in_generate", default=False, action="store_true", help='')
+        
+
+
         #logging params
         parser.add_argument("--progress_bar_refresh_rate", type=int, default=0, help="How often to refresh progress bar (in steps). Value 0 disables progress bar.")
         parser.add_argument("--fp32", action='store_true', help="default is fp16. Use --fp32 to switch to fp32")
@@ -259,6 +335,11 @@ class InferenceSimplifier(pl.LightningModule):
 
 
 def main(args):
+
+    if Path(args.translation).is_file():
+        logging.info("Output file `{}` already exists and will be overwritten...".format(args.translation))
+        Path(args.translation).unlink()
+
     checkpoint_path=os.path.join(args.model_path, args.checkpoint_name)
     simplifier = InferenceSimplifier(args)
     
@@ -267,6 +348,7 @@ def main(args):
    
     simplifier.load_state_dict(cp["state_dict"])
     #simplifier.load_from_checkpoint(checkpoint_path, args) ## does not work ("unexpected keys")
+    # breakpoint()
      
     if args.print_params:
         for name, param in simplifier.named_parameters():
@@ -297,6 +379,9 @@ def main(args):
                          )
     trainer.test(simplifier)
 
+    # print("Finished inference on {}".format(self.args.test_source))
+    print("Decoded outputs written to {}".format(args.translation))
+        
 
 if __name__ == "__main__":
     main_arg_parser = argparse.ArgumentParser(description="simplification")

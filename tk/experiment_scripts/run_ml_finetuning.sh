@@ -8,7 +8,7 @@ scratch=/srv/scratch6/kew/mbart/longmbart
 pretrained=$scratch/longmbart
 data=/srv/scratch6/kew/respo_hospo_data/rrgen_210426/ml_hosp_re/raw
 # data=$scratch/dummy/en/raw/
-save_dir=$scratch/ml_hosp_re/
+save_dir=$scratch/ml_mbart/finetuned
 
 # FORMAT=''#_tagged
 MAX_TGT_LEN=512
@@ -30,18 +30,16 @@ echo "Fine-tuning output dir: $save_dir/$save_pref"
 
 echo "Running on GPU(s) $GPU"
 
-set -x # to log experiment execution
-
 python -m longformer.simplification \
 --from_pretrained $pretrained \
 --tokenizer $pretrained \
 --save_dir $save_dir \
 --save_prefix $save_pref \
---train_source $data/train.review_tagged \
+--train_source $data/train.review_tagged_pref_dom_rat \
 --train_target $data/train.response_tagged \
---val_source $data/valid.review_tagged \
+--val_source $data/valid.review_tagged_pref_dom_rat \
 --val_target $data/valid.response_tagged \
---test_source $data/test.review_tagged \
+--test_source $data/test.review_tagged_pref_dom_rat \
 --test_target $data/test.response_tagged \
 --tags_included \
 --max_input_len $MAX_SRC_LEN --max_output_len $MAX_TGT_LEN \
