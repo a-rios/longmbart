@@ -207,7 +207,7 @@ class InferenceSimplifier(pl.LightningModule):
             batch_scores = generated_ids.sequences_scores.tolist()
             batch_source_strs = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=True)
 
-            for batch_i in range(self.args.batch_size):
+            for batch_i in range(len(batch_source_strs)):
                 src_str = batch_source_strs[batch_i]
                 if self.args.test_target:
                     ref_str = ' '.join(ref[batch_i].split(' ')[:-2]) if self.tags_included else ref[batch_i]

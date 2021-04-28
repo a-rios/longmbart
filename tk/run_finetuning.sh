@@ -63,7 +63,7 @@ python -m longformer.simplification \
 --patience 5 --max_epochs 20 \
 --lr_reduce_patience 8 --lr_reduce_factor 0.5 \
 --grad_ckpt \
---progress_bar_refresh_rate 1 
+--progress_bar_refresh_rate 1
 
 # --src_lang en_XX --tgt_lang en_XX \
 # --src_lang de_DE --tgt_lang de_DE \
