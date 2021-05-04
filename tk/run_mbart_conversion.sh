@@ -6,19 +6,18 @@ set -e
 home=/home/user/kew/
 workdir=$home/INSTALLS/longmbart/
 scratch=/srv/scratch6/kew/mbart/
-data=/srv/scratch6/kew/respo_hospo_data/rrgen_210426/ml_hosp_re/raw #$scratch/longmbart/dummy/
-spm_pieces=$data/ml_vocab_210426.txt
+data=$scratch/hospo_respo/ml_hosp_re_unmasked_untok/raw/
 
 # collect list-of-spm-pieces
-python collect_list_of_spm_pieces.py \
-    $data/train.review_tagged $data/train.response_tagged \
+python $workdir/tk/collect_list_of_spm_pieces.py \
+    $data/train.review $data/train.response \
     $data/train.rating $data/train.domain $data/train.est_label \
-    $data/valid.review_tagged $data/valid.response_tagged \
+    $data/valid.review $data/valid.response \
     $data/valid.rating $data/valid.domain $data/valid.est_label \
     --spm $scratch/hf4mbart/sentencepiece.bpe.model \
-    --outfile $spm_pieces
+    --outfile $data/spm_pieces.txt
 
-echo "saved spm pieces to $spm_pieces"
+echo "saved spm pieces to $data/spm_pieces.txt"
 
 echo "converting mBART to LONGmBART..."
 
@@ -27,11 +26,11 @@ ATT_WIN=128
 
 python $workdir/scripts/convert_mbart_to_longformerencoderdecoder.py \
     --base_model facebook/mbart-large-cc25 \
-    --save_model_to $scratch/longmbart/longmbart_$MAX_POS/ \
-    --attention_window $ATT_WIN \
-    --reduce-to-vocab $spm_pieces \
+    --save_model_to $data/../longmbart_model/ \
+    --reduce-to-vocab $data/spm_pieces.txt \
     --cache_dir $scratch/hf4mbart \
-    --max_pos $MAX_POS #\
+    --attention_window $ATT_WIN \
+    --max_pos $MAX_POS
 
 # # collect list-of-spm-pieces
 # python collect_list_of_spm_pieces.py \

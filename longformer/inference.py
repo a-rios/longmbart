@@ -14,7 +14,6 @@ from rouge_score import rouge_scorer
 import sacrebleu
 
 import pytorch_lightning as pl
-from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import TestTubeLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.overrides.data_parallel import LightningDistributedDataParallel
@@ -150,8 +149,6 @@ class InferenceSimplifier(pl.LightningModule):
         for p in self.model.parameters():
             p.requires_grad = False
 
-        # breakpoint()
-
         input_ids, ref, tags  = batch
         input_ids, attention_mask = self._prepare_input(input_ids)
         if self.tags_included:
@@ -161,8 +158,7 @@ class InferenceSimplifier(pl.LightningModule):
             elif tags[0] is not None:
                 # get decoder_start_token_ids from file in target_tags
                 tgt_ids = [self.tokenizer.lang_code_to_id[sample.split(' ')[-1]]  for sample in tags ]
-            # breakpoint()
-            # TODO: check if inference with batch_size > 1
+            
             decoder_start_token_ids = torch.tensor(tgt_ids, dtype=input_ids.dtype, device=input_ids.device).unsqueeze(1)
             generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
                                             use_cache=True, max_length=self.args.max_output_len,
@@ -262,6 +258,98 @@ class InferenceSimplifier(pl.LightningModule):
             print("Evaluation on provided reference [{}] ".format(self.args.test_target))
             print(logs)
 
+    def predict_step(self, batch, batch_nb):
+        for p in self.model.parameters():
+            p.requires_grad = False
+
+        breakpoint()
+
+        input_ids, ref, tags  = batch
+        input_ids, attention_mask = self._prepare_input(input_ids)
+        if self.tags_included:
+            if self.args.infer_target_tags:
+                tgt_ids = 
+            else:
+                assert (ref[0] is not None or tags[0] is not None), "Need either reference with target labels or list of target labels with --tags-included (multilingual batches)"
+                if  ref[0] is not None:
+                    tgt_ids = [self.tokenizer.lang_code_to_id[sample.split(' ')[-1]]  for sample in ref ]
+                elif tags[0] is not None:
+                    # get decoder_start_token_ids from file in target_tags
+                    tgt_ids = [self.tokenizer.lang_code_to_id[sample.split(' ')[-1]]  for sample in tags ]
+                        
+            decoder_start_token_ids = torch.tensor(tgt_ids, dtype=input_ids.dtype, device=input_ids.device).unsqueeze(1)
+            generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
+                                            use_cache=True, max_length=self.args.max_output_len,
+                                            num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_ids=decoder_start_token_ids,
+                                            do_sample=self.args.do_sample,
+                                            temperature=self.args.temperature,
+                                            top_k=self.args.top_k,
+                                            top_p=self.args.top_p,
+                                            repetition_penalty=self.args.repetition_penalty,
+                                            length_penalty=self.args.length_penalty,
+                                            num_return_sequences=self.args.num_return_sequences,
+                                            output_scores=True if self.args.output_to_json else self.args.output_scores,
+                                            return_dict_in_generate=True if self.args.output_to_json else self.args.return_dict_in_generate)
+        else:
+            generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
+                                            use_cache=True, max_length=self.max_input_len,
+                                            num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_id=self.tokenizer.lang_code_to_id[self.tgt_lang],
+                                            do_sample=self.args.do_sample,
+                                            temperature=self.args.temperature,
+                                            top_k=self.args.top_k,
+                                            top_p=self.args.top_p,
+                                            repetition_penalty=self.args.repetition_penalty,
+                                            length_penalty=self.args.length_penalty,
+                                            num_return_sequences=self.args.num_return_sequences,
+                                            output_scores=True if self.args.output_to_json else self.args.output_scores,
+                                            return_dict_in_generate=True if self.args.output_to_json else self.args.return_dict_in_generate)
+
+        # breakpoint()
+        if not self.args.output_to_json:
+
+            generated_strs = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=True)
+            with open(self.args.translation, 'a') as f:
+                for sample in generated_strs:
+                    f.write(sample + "\n")
+                    
+        else:
+            # breakpoint()
+            # NOTE: modify for inference with self.args.batch_size > 1:
+            batch_hyp_strs = self.tokenizer.batch_decode(generated_ids.sequences.tolist(), skip_special_tokens=True)
+            batch_scores = generated_ids.sequences_scores.tolist()
+            batch_source_strs = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=True)
+
+            generated_strs = []
+
+            for batch_i in range(len(batch_source_strs)):
+                src_str = batch_source_strs[batch_i]
+                if self.args.test_target:
+                    ref_str = ' '.join(ref[batch_i].split(' ')[:-2]) if self.tags_included else ref[batch_i]
+                else:
+                    ref_str = None
+
+                hyps = batch_hyp_strs[batch_i:batch_i+self.args.batch_size]
+                scores = batch_scores[batch_i:batch_i+self.args.batch_size]
+
+                output_dict = {
+                    'src': src_str,
+                    'ref': ref_str,
+                    'hyps': [],
+                    }
+                # output hyps don't appear to be sorted by
+                # overall probability scores.
+                scored_hyps = {score: hyp for score, hyp in zip(scores, hyps)}
+                for i, score in enumerate(sorted(scored_hyps.keys(), reverse=True)): # sort according to NLL (smaller = better)
+                    # add the 1-best hypothesis to generated_strs for evaluation                 
+                    if i == 0:
+                        generated_strs.append(scored_hyps[score])
+                    output_dict['hyps'].append({'score': score, 'hyp': scored_hyps[score]})
+                
+                json_line = json.dumps(output_dict, ensure_ascii=False)
+                with open(self.args.translation, 'a') as f:
+                    f.write(json_line+"\n")
+        
+
     def forward(self):
         pass
     
@@ -273,8 +361,6 @@ class InferenceSimplifier(pl.LightningModule):
             reference = self.datasets[split_name + "_target"]
         target_tags = None
         if self.args.target_tags is not None:
-            target_tags = self.datasets["target_tags"]
-        elif self.args.infer_target_tags:
             target_tags = self.datasets["target_tags"]
         dataset = SimplificationDatasetForInference(inputs=self.datasets[split_name + "_source"], reference=reference , name=split_name, tokenizer=self.tokenizer,
                                        max_input_len=self.max_input_len, max_output_len=self.max_output_len, src_lang=self.src_lang, tgt_lang=self.tgt_lang, tags_included=self.tags_included, target_tags=target_tags)
@@ -308,17 +394,17 @@ class InferenceSimplifier(pl.LightningModule):
         parser.add_argument("--test_source", type=str, default=None, help="Path to the source test file.")
         parser.add_argument("--test_target", type=str, default=None, help="Path to the target test file (optional, if given, will output rouge and bleu).")
         parser.add_argument("--target_tags", type=str, default=None, help="If test_target is not given: provide path to file with list of target tags (one per sample in test_source).")
+        parser.add_argument("--infer_target_tags", type=str, default=None, help="If test_target is not given and target language tags can be inferred from the source language tags provided with --tags_included (e.g. de_DE -> de_DE). This save having a dedicated test file with the tags already specified.")
         parser.add_argument("--src_lang", type=str, default=None, help="Source language tag (optional, for multilingual batches, preprocess text files to include language tags.")
         parser.add_argument("--tgt_lang", type=str, default=None, help="Target language tag (optional, for multilingual batches, preprocess text files to include language tags.")
         parser.add_argument("--tags_included", action='store_true', help="Text files already contain special tokens (language tags and </s>. Source:  seq </s> src_tag, Target: seq </s> tgt_tag. Note: actual target sequence is tgt_tag seq </s>, but mBART's function shift_tokens_right will shift tokens to the correct order.")
-        parser.add_argument("--infer_target_tags", action="store_true", default=False, help="If test_target is not given and target language tags can be inferred from the source language tags provided with --tags_included (e.g. de_DE -> de_DE). This save having a dedicated test file with the tags already specified.")
         parser.add_argument("--max_input_len", type=int, default=256, help="maximum num of wordpieces, if unspecified, will use number of encoder positions from model config.")
         parser.add_argument("--max_output_len", type=int, default=512, help="maximum num of wordpieces, if unspecified, will use number of decoder positions from model config.")
-        # parser.add_argument("--do_predict", action="store_true", default=False, help="If given, predictions are run using the `predict_step()` method rather than `test_step()`. Outputs are written to the specified output file without being evaluated!")
         
         parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
         parser.add_argument("--num_workers", type=int, default=0, help="Number of data loader workers")
         parser.add_argument("--gpus", type=int, default=-1, help="Number of gpus. 0 for CPU")
+        
         
         ## inference params
         parser.add_argument("--translation", type=str, default='decoded.out', help="Output file to write decoded sequence to.")
@@ -375,17 +461,7 @@ def main(args):
     if args.test_target is not None:
         simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source, 'test_target': args.test_target })
     else:
-        if args.tags_included and args.infer_target_tags:
-            # source texts must end in with a single valid language tag,
-            # e.g. de_DE, en_XX, etc.
-            data_dict = datasets.load_dataset('text', data_files={'test_source': args.test_source})
-            # datasets library allows loading from an
-            # in-memory dict, so construct one from the source
-            # text tags that can be loaded
-            target_tags_dict = {'text': [text.split()[-1] for text in data_dict['test_source']['text']]} 
-            data_dict['target_tags'] = datasets.Dataset.from_dict(target_tags_dict)
-            simplifier.datasets = data_dict
-        elif args.target_tags is not None:
+        if args.target_tags is not None:
             simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source, 'target_tags': args.target_tags })
         else:
             simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source })
@@ -396,7 +472,7 @@ def main(args):
         version=0  # always use version=0
     )
 
-    trainer = Trainer(gpus=args.gpus, distributed_backend='ddp' if torch.cuda.is_available() else None,
+    trainer = pl.Trainer(gpus=args.gpus, distributed_backend='ddp' if torch.cuda.is_available() else None,
                          replace_sampler_ddp=False,
                          limit_test_batches=args.test_percent_check,
                          logger=logger,
@@ -404,12 +480,10 @@ def main(args):
                          precision=32 if args.fp32 else 16, amp_level='O2'
                          )
     
-    # breakpoint()
-
-    # if not args.do_predict:
+    # if args.test
     trainer.test(simplifier)
-    # else:
-    #     trainer.predict(simplifier)
+
+
 
     # print("Finished inference on {}".format(self.args.test_source))
     print("Decoded outputs written to {}".format(args.translation))

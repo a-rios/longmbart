@@ -4,11 +4,20 @@
 set -e
 
 GPU=$1
-scratch=/srv/scratch6/kew/mbart/longmbart 
-data=/srv/scratch6/kew/respo_hospo_data/rrgen_210426/ml_hosp_re/raw
-finetuned=$scratch/ml_hosp_re/finetuned/2021-04-27_13-03-30_w128/
-# data=$scratch/dummy/de/raw/
-# finetuned=$scratch/dummy/de/finetuned/w512/
+scratch=/srv/scratch6/kew/mbart/hospo_respo/ml_hosp_re_unmasked_untok/
+data=$scratch/raw/ # regular test set (2020)
+# data=$scratch/raw2021/ # updated 2021 test set
+outdir=$scratch/
+
+# finetuned=$scratch/2021-04-30_12-40-05_w128-2021
+# model_checkpoint=$finetuned/'checkpointepoch=19_vloss=3.54154.ckpt'
+
+# finetuned=$scratch/2021-04-29_18-44-42_w128
+# model_checkpoint=$finetuned/'checkpointepoch=19_vloss=3.57276.ckpt'
+
+finetuned=$scratch/2021-05-02_22-27-31_w128-der_pref
+model_checkpoint=$finetuned/'checkpointepoch=19_vloss=3.56469.ckpt'
+
 outdir=$finetuned/inference/
 
 if [[ -z $GPU ]]; then
@@ -19,23 +28,28 @@ export CUDA_VISIBLE_DEVICES=$GPU
 
 mkdir -p $outdir
 
+set -x
+
 python -m longformer.simplify \
     --model_path $finetuned \
-    --checkpoint "checkpointepoch=18_vloss=3.46757.ckpt" \
+    --checkpoint $model_checkpoint \
     --tokenizer $finetuned \
-    --test_source $data/test.review_tagged \
-    --test_target $data/test.response_tagged \
+    --test_source $data/test.review_dom_est_rat \
+    --test_target $data/test.response \
+    --tags_included \
     --max_output_len 512 \
     --max_input_len 512 \
-    --batch_size 2 \
+    --batch_size 3 \
     --num_workers 5 \
     --gpus 1 \
     --beam_size 6 \
     --progress_bar_refresh_rate 1 \
-    --tags_included \
-    --num_return_sequences 5 \
-    --translation $outdir/chkpt_E18_.jsonl --output_to_json \
+    --num_return_sequences 1 \
+    --translation $outdir/chkpt_E19_decode_on_raw2020.jsonl --output_to_json \
 
+# --infer_target_tags \
+
+# --test_target $data/test.response \
 #--translation $outdir/chkpt_E08_.jsonl 
 # --src_lang de_DE --tgt_lang de_DE
     

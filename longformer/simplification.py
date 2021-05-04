@@ -12,7 +12,7 @@ from rouge_score import rouge_scorer
 import sacrebleu
 
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import TestTubeLogger
+from pytorch_lightning.loggers import TestTubeLogger, WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.overrides.data_parallel import LightningDistributedDataParallel
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
@@ -346,6 +346,8 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--tags_included", action='store_true', help="Text files already contain special tokens (language tags and </s>. Source:  seq </s> src_tag, Target: seq </s> tgt_tag. Note: actual target sequence is tgt_tag seq </s>, but mBART's function shift_tokens_right will shift tokens to the correct order.")
         parser.add_argument("--max_output_len", type=int, default=256, help="maximum num of wordpieces/summary. Used for training and testing")
         parser.add_argument("--max_input_len", type=int, default=512, help="maximum num of wordpieces/summary. Used for training and testing")
+        parser.add_argument("--wandb", type=str, default=None, help="WandB project name to use if logging fine-tuning with WandB.")
+        
         
         parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
         parser.add_argument("--num_workers", type=int, default=0, help="Number of data loader workers")
@@ -406,11 +408,14 @@ def main(args):
   
     model.datasets = datasets.load_dataset('text', data_files={'train_source': args.train_source, 'train_target': args.train_target, 'val_source': args.val_source, 'val_target': args.val_target, 'test_source': args.test_source, 'test_target': args.test_target })
 
-    logger = TestTubeLogger(
-        save_dir=args.save_dir,
-        name=args.save_prefix,
-        version=0  # always use version=0
-    )
+    if args.wandb:
+        logger = WandbLogger(project=args.wandb)
+    else:
+        logger = TestTubeLogger(
+            save_dir=args.save_dir,
+            name=args.save_prefix,
+            version=0  # always use version=0
+        )
 
     print(args)
 

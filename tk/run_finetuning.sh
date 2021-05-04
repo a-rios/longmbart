@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # -*- coding: utf-8 -*-
 
+# Example call:
+# nohup bash run_finetuning 4 > logs/finetuning.log &
+
 set -e
 
 GPU=$1
-scratch=/srv/scratch6/kew/mbart/longmbart
-pretrained=$scratch/longmbart
-data=/srv/scratch6/kew/respo_hospo_data/rrgen_210426/ml_hosp_re/raw
-# data=$scratch/dummy/en/raw/
-save_dir=$scratch/ml_hosp_re/
+scratch=/srv/scratch6/kew/mbart/hospo_respo/ml_hosp_re_unmasked_untok/
+pretrained=$scratch/longmbart_model/
+data=$scratch/raw/
+outdir=$scratch/
 
-# FORMAT=''#_tagged
 MAX_TGT_LEN=512
 MAX_SRC_LEN=512
 ATT_WIN=128
@@ -25,8 +26,8 @@ timestamp() {
   date +"%Y-%m-%d_%H-%M-%S" # current time
 }
 
-save_pref="$(timestamp)_w$ATT_WIN"
-echo "Fine-tuning output dir: $save_dir/$save_pref"
+save_pref="$(timestamp)_w$ATT_WIN-der_pref"
+echo "Fine-tuning output dir: $outdir/$save_pref"
 
 echo "Running on GPU(s) $GPU"
 
@@ -35,14 +36,14 @@ set -x # to log experiment execution
 python -m longformer.simplification \
 --from_pretrained $pretrained \
 --tokenizer $pretrained \
---save_dir $save_dir \
+--save_dir $outdir \
 --save_prefix $save_pref \
---train_source $data/train.review_tagged \
---train_target $data/train.response_tagged \
---val_source $data/valid.review_tagged \
---val_target $data/valid.response_tagged \
---test_source $data/test.review_tagged \
---test_target $data/test.response_tagged \
+--train_source $data/train.review_dom_est_rat \
+--train_target $data/train.response \
+--val_source $data/valid.review_dom_est_rat \
+--val_target $data/valid.response \
+--test_source $data/test.review_dom_est_rat \
+--test_target $data/test.response \
 --tags_included \
 --max_input_len $MAX_SRC_LEN --max_output_len $MAX_TGT_LEN \
 --batch_size 4 \
@@ -63,8 +64,5 @@ python -m longformer.simplification \
 --patience 5 --max_epochs 20 \
 --lr_reduce_patience 8 --lr_reduce_factor 0.5 \
 --grad_ckpt \
---progress_bar_refresh_rate 1
-
-# --src_lang en_XX --tgt_lang en_XX \
-# --src_lang de_DE --tgt_lang de_DE \
-# --tags_included \
+--progress_bar_refresh_rate 1 \
+--wandb readvisor
