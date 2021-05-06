@@ -39,9 +39,6 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
-
-
-
 class SimplificationDatasetForInference(Dataset):
     def __init__(self, inputs, reference, name, tokenizer, max_input_len, max_output_len, src_lang, tgt_lang, tags_included, target_tags):
         self.inputs = inputs
@@ -72,7 +69,8 @@ class SimplificationDatasetForInference(Dataset):
             sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], src_lang=self.src_lang, tgt_lang=self.tgt_lang , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt") # TODO move this to _get_dataloader, preprocess everything at once?
 
         input_ids = sample['input_ids'].squeeze()
-      
+        if self.tags_included: # move language tag to the end of the sequence in source
+            input_ids = torch.cat([input_ids[1:], input_ids[:1]])
         return input_ids, reference, target_tags
 
     @staticmethod
@@ -150,19 +148,16 @@ class InferenceSimplifier(pl.LightningModule):
         for p in self.model.parameters():
             p.requires_grad = False
 
-        # breakpoint()
-
         input_ids, ref, tags  = batch
         input_ids, attention_mask = self._prepare_input(input_ids)
         if self.tags_included:
             assert (ref[0] is not None or tags[0] is not None), "Need either reference with target labels or list of target labels with --tags-included (multilingual batches)"
             if  ref[0] is not None:
-                tgt_ids = [self.tokenizer.lang_code_to_id[sample.split(' ')[-1]]  for sample in ref ]
+                tgt_ids = [self.tokenizer.lang_code_to_id[sample.split(' ')[0]]  for sample in ref ] # first token
             elif tags[0] is not None:
                 # get decoder_start_token_ids from file in target_tags
-                tgt_ids = [self.tokenizer.lang_code_to_id[sample.split(' ')[-1]]  for sample in tags ]
-            # breakpoint()
-            # TODO: check if inference with batch_size > 1
+                tgt_ids = [self.tokenizer.lang_code_to_id[sample.split(' ')[0]]  for sample in tags ]
+
             decoder_start_token_ids = torch.tensor(tgt_ids, dtype=input_ids.dtype, device=input_ids.device).unsqueeze(1)
             generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
                                             use_cache=True, max_length=self.args.max_output_len,
@@ -190,7 +185,6 @@ class InferenceSimplifier(pl.LightningModule):
                                             output_scores=True if self.args.output_to_json else self.args.output_scores,
                                             return_dict_in_generate=True if self.args.output_to_json else self.args.return_dict_in_generate)
 
-        # breakpoint()
         if not self.args.output_to_json:
 
             generated_strs = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=True)
@@ -204,8 +198,10 @@ class InferenceSimplifier(pl.LightningModule):
                 return {'decoded' : generated_strs}
         
         else:
-            # breakpoint()
-            # NOTE: modify for inference with self.args.batch_size > 1:
+            
+            # if running inference with self.args.batch_size
+            # > 1, we need to make sure we pair the correct input sequence
+            # with the correct returned hypotheses.
             batch_hyp_strs = self.tokenizer.batch_decode(generated_ids.sequences.tolist(), skip_special_tokens=True)
             batch_scores = generated_ids.sequences_scores.tolist()
             batch_source_strs = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=True)
@@ -227,11 +223,11 @@ class InferenceSimplifier(pl.LightningModule):
                     'ref': ref_str,
                     'hyps': [],
                     }
-                # output hyps don't appear to be sorted by
-                # overall probability scores.
+                # Ensure output hyps are sorted by
+                # overall NLL probability scores (smaller = better).
                 scored_hyps = {score: hyp for score, hyp in zip(scores, hyps)}
-                for i, score in enumerate(sorted(scored_hyps.keys(), reverse=True)): # sort according to NLL (smaller = better)
-                    # add the 1-best hypothesis to generated_strs for evaluation                 
+                for i, score in enumerate(sorted(scored_hyps.keys(), reverse=True)):
+                    # add the 1-best hypothesis to generated_strs for evaluation             
                     if i == 0:
                         generated_strs.append(scored_hyps[score])
                     output_dict['hyps'].append({'score': score, 'hyp': scored_hyps[score]})
@@ -310,8 +306,8 @@ class InferenceSimplifier(pl.LightningModule):
         parser.add_argument("--target_tags", type=str, default=None, help="If test_target is not given: provide path to file with list of target tags (one per sample in test_source).")
         parser.add_argument("--src_lang", type=str, default=None, help="Source language tag (optional, for multilingual batches, preprocess text files to include language tags.")
         parser.add_argument("--tgt_lang", type=str, default=None, help="Target language tag (optional, for multilingual batches, preprocess text files to include language tags.")
-        parser.add_argument("--tags_included", action='store_true', help="Text files already contain special tokens (language tags and </s>. Source:  seq </s> src_tag, Target: seq </s> tgt_tag. Note: actual target sequence is tgt_tag seq </s>, but mBART's function shift_tokens_right will shift tokens to the correct order.")
-        parser.add_argument("--infer_target_tags", action="store_true", default=False, help="If test_target is not given and target language tags can be inferred from the source language tags provided with --tags_included (e.g. de_DE -> de_DE). This save having a dedicated test file with the tags already specified.")
+        parser.add_argument("--tags_included", action='store_true', help="Text files already contain special tokens (language tags and </s>. Source:  src_tag seq, Target:  tgt_tag seq. Note: actual source sequence is seq src_tag </s>, will be changed internally after possibly clipping sequence to given max_length.")
+        parser.add_argument("--infer_target_tags", action="store_true", default=False, help="If test_target is not given and target language tags can be inferred from the source language tags provided with --tags_included (e.g. de_DE -> de_DE). This save having a dedicated text file in which the tags are explicitly specified.")
         parser.add_argument("--max_input_len", type=int, default=256, help="maximum num of wordpieces, if unspecified, will use number of encoder positions from model config.")
         parser.add_argument("--max_output_len", type=int, default=512, help="maximum num of wordpieces, if unspecified, will use number of decoder positions from model config.")
         # parser.add_argument("--do_predict", action="store_true", default=False, help="If given, predictions are run using the `predict_step()` method rather than `test_step()`. Outputs are written to the specified output file without being evaluated!")
@@ -327,21 +323,17 @@ class InferenceSimplifier(pl.LightningModule):
         
         parser.add_argument("--output_to_json", default=False, action="store_true", help='If true, decoding output is a verbose JSONL containing, src, tgt, and scored model output hyps')
         
-
-        # decoding strategy params
-        # passed to model.generate() (in generation_utils.py)
-        parser.add_argument("--do_sample", default=False, action="store_true", help='')
-        parser.add_argument("--temperature", default=1.0, type=float, help='')
-        parser.add_argument("--top_k", default=50, type=int, help='')
-        parser.add_argument("--top_p", default=1.0, type=float, help='')
-        parser.add_argument("--repetition_penalty", default=1.0, type=float, help='')
-        parser.add_argument("--length_penalty", default=1.0, type=float, help='')
-        parser.add_argument("--output_scores", default=False, action="store_true", help='')
-        parser.add_argument("--num_return_sequences", default=1, type=int, help='')
-        parser.add_argument("--return_dict_in_generate", default=False, action="store_true", help='')
+        # decoding strategy params (passed to model.generate() (in generation_utils.py))
+        parser.add_argument("--do_sample", default=False, action="store_true", help='Whether or not to use sampling ; use greedy decoding otherwise.')
+        parser.add_argument("--temperature", default=1.0, type=float, help='The value used to module the next token probabilities.')
+        parser.add_argument("--top_k", default=50, type=int, help='The number of highest probability vocabulary tokens to keep for top-k-filtering.')
+        parser.add_argument("--top_p", default=1.0, type=float, help='If set to float < 1, only the most probable tokens with probabilities that add up to :obj:`top_p` or higher are kept for generation.')
+        parser.add_argument("--repetition_penalty", default=1.0, type=float, help='The parameter for repetition penalty. 1.0 means no penalty.')
+        parser.add_argument("--length_penalty", default=1.0, type=float, help='Exponential penalty to the length. 1.0 means no penalty.')
+        parser.add_argument("--output_scores", default=False, action="store_true", help='Whether or not to return the prediction scores.')
+        parser.add_argument("--num_return_sequences", default=1, type=int, help='The number of independently computed returned sequences for each element in the batch, i.e. N-best')
+        parser.add_argument("--return_dict_in_generate", default=False, action="store_true", help='Whether or not to return a :class:`~transformers.file_utils.ModelOutput` instead of a plain tuple.')
         
-
-
         #logging params
         parser.add_argument("--progress_bar_refresh_rate", type=int, default=0, help="How often to refresh progress bar (in steps). Value 0 disables progress bar.")
         parser.add_argument("--fp32", action='store_true', help="default is fp16. Use --fp32 to switch to fp32")
@@ -364,7 +356,6 @@ def main(args):
    
     simplifier.load_state_dict(cp["state_dict"])
     #simplifier.load_from_checkpoint(checkpoint_path, args) ## does not work ("unexpected keys")
-    # breakpoint()
      
     if args.print_params:
         for name, param in simplifier.named_parameters():
@@ -382,7 +373,9 @@ def main(args):
             # datasets library allows loading from an
             # in-memory dict, so construct one from the source
             # text tags that can be loaded
-            target_tags_dict = {'text': [text.split()[-1] for text in data_dict['test_source']['text']]} 
+            # NOTE: tags_included expects input sequences to
+            # be prefixed with a single language tag, e.g. de_DE
+            target_tags_dict = {'text': [text.split()[0] for text in data_dict['test_source']['text']]} 
             data_dict['target_tags'] = datasets.Dataset.from_dict(target_tags_dict)
             simplifier.datasets = data_dict
         elif args.target_tags is not None:
@@ -404,14 +397,8 @@ def main(args):
                          precision=32 if args.fp32 else 16, amp_level='O2'
                          )
     
-    # breakpoint()
-
-    # if not args.do_predict:
     trainer.test(simplifier)
-    # else:
-    #     trainer.predict(simplifier)
-
-    # print("Finished inference on {}".format(self.args.test_source))
+    
     print("Decoded outputs written to {}".format(args.translation))
         
 

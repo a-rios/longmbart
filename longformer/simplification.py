@@ -81,7 +81,9 @@ class SimplificationDataset(Dataset):
 
         input_ids = sample['input_ids'].squeeze()
         output_ids = sample['labels'].squeeze()
-      
+        if self.tags_included: # move language tag to the end of the sequence in source, also in target (so we can use mbarts shift_tokens_right that takes padding into account)
+            input_ids = torch.cat([input_ids[1:], input_ids[:1]])
+            output_ids = torch.cat([output_ids[1:], output_ids[:1]])
         return input_ids, output_ids
 
     @staticmethod
@@ -151,7 +153,7 @@ class Simplifier(pl.LightningModule):
         input_ids, attention_mask = self._prepare_input(input_ids)
         decoder_input_ids = shift_tokens_right(output_ids, self.config.pad_token_id) # (in: output_ids, eos_token_id, tgt_lang_id out: tgt_lang_id, output_ids, eos_token_id)
         labels = decoder_input_ids[:, 1:].clone()
-        decoder_input_ids = decoder_input_ids[:, :-1] # without eos
+        decoder_input_ids = decoder_input_ids[:, :-1] # without eos/last pad
         decoder_attention_mask = (decoder_input_ids != self.tokenizer.pad_token_id)
 
         outputs = self.model(
@@ -343,7 +345,7 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--test_target", type=str, default=None, help="Path to the target test file (to evaluate after training is finished).")
         parser.add_argument("--src_lang", type=str, default=None, help="Source language tag (optional, for multilingual batches, preprocess text files to include language tags.")
         parser.add_argument("--tgt_lang", type=str, default=None, help="Target language tag (optional, for multilingual batches, preprocess text files to include language tags.")
-        parser.add_argument("--tags_included", action='store_true', help="Text files already contain special tokens (language tags and </s>. Source:  seq </s> src_tag, Target: seq </s> tgt_tag. Note: actual target sequence is tgt_tag seq </s>, but mBART's function shift_tokens_right will shift tokens to the correct order.")
+        parser.add_argument("--tags_included", action='store_true', help="Text files already contain special tokens (language tags and </s>. Source:  src_tag seq, Target:  tgt_tag seq. Note: actual source sequence is seq src_tag </s>, will be changed internally after possibly clipping sequence to given max_length.")
         parser.add_argument("--max_output_len", type=int, default=256, help="maximum num of wordpieces/summary. Used for training and testing")
         parser.add_argument("--max_input_len", type=int, default=512, help="maximum num of wordpieces/summary. Used for training and testing")
         parser.add_argument("--wandb", type=str, default=None, help="WandB project name to use if logging fine-tuning with WandB.")

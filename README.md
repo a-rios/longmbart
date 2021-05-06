@@ -4,7 +4,8 @@ Pretrained mBART model from huggingface with `Longformer` windowed attention in 
 
 ### Installation
 
-```bash
+```
+    bash
     conda create --name longmbart python=3.8.5
     conda activate longmbart
     git clone https://github.com/ZurichNLP/longformer.git longmbart
@@ -17,7 +18,7 @@ Pretrained mBART model from huggingface with `Longformer` windowed attention in 
     
    To convert the huggingface mBART model, use scripts/convert_mbart_to_longformerencoderdecoder.py, for example:
    
-   ```
+   ``` 
    python $longformer_dir/scripts/convert_mbart_to_longformerencoderdecoder.py \
    --save_model_to path-to-save-new-model \
    --attention_window 512 \
@@ -31,8 +32,8 @@ Pretrained mBART model from huggingface with `Longformer` windowed attention in 
    `--add_language_tags` will add new language tags, use `--initialize_tags` to specify which embeddings they should be initialized with, e.g. for German language levels, start with the German embeddings.
    
    To fine-tune the converted model, use `longformer/simplification.py`. If training on multilingual data, preprocess your data to contain the language tags and </s> like this:
-   * source text: `source_sequene </s> src_lang`
-   * target text: `target_sequence </s> trg_lang` (actual sequence in the model will be `trg_lang target_sequence </s>`, reordering happens internally)
+   * source text: `src_lang source_sequene` (actual sequence in the model will be `source_sequence </s> src_lang`, reordering happens internally)
+   * target text: `trg_lang target_sequence` 
    
  Example for fine-tuning (see `longformer/simplification.py` for all options):
    
@@ -94,4 +95,4 @@ python -m longformer.simplify \
 --tags_included
 ```
 Reference file is optional, if given, will print evaluation metrics (rouge1, rouge2, rougeL, rougeLsum, bleu). 
-If only one target language, use `--tgt_lang` to set, if multiple languges, either give a reference file with tags (`target_sequence </s> tgt_lang`) with `--tags_included` or just a list of target tags with `--target_tags` (one tag per line for each sample in `--test_source`).
+If only one target language, use `--tgt_lang` to set, if multiple languages, either give a reference file with tags (`tgt_lang target_sequence`) with `--tags_included` or just a list of target tags with `--target_tags` (one tag per line for each sample in `--test_source`).
