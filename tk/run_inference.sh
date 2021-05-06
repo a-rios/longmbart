@@ -5,7 +5,7 @@ set -e
 
 GPU=$1
 scratch=/srv/scratch6/kew/mbart/hospo_respo/ml_hosp_re_unmasked_untok/
-data=$scratch/raw/ # regular test set (2020)
+data=$scratch/head50/ # regular test set (2020)
 # data=$scratch/raw2021/ # updated 2021 test set
 outdir=$scratch/
 
@@ -34,20 +34,24 @@ python -m longformer.simplify \
     --model_path $finetuned \
     --checkpoint $model_checkpoint \
     --tokenizer $finetuned \
-    --test_source $data/test.review_dom_est_rat \
-    --test_target $data/test.response \
+    --test_source $data/test.review_tagged \
+    --infer_target_tags \
     --tags_included \
     --max_output_len 512 \
     --max_input_len 512 \
-    --batch_size 3 \
+    --batch_size 2 \
     --num_workers 5 \
     --gpus 1 \
-    --beam_size 6 \
+    --beam_size 3 \
+    --do_sample --top_k 5 \
     --progress_bar_refresh_rate 1 \
-    --num_return_sequences 1 \
-    --translation $outdir/chkpt_E19_decode_on_raw2020.jsonl --output_to_json \
+    --num_return_sequences 3 \
+    --translation scratch.out --output_to_json;
 
-# --infer_target_tags \
+    # --test_target $data/test.response_tagged \
+
+# $outdir/chkpt_E19_decode_on_raw2020.jsonl --output_to_json
+# 
 
 # --test_target $data/test.response \
 #--translation $outdir/chkpt_E08_.jsonl 

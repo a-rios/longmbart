@@ -197,13 +197,12 @@ class InferenceSimplifier(pl.LightningModule):
             else:
                 return {'decoded' : generated_strs}
         
-        else:
-            
+        else:            
             # if running inference with self.args.batch_size
             # > 1, we need to make sure we pair the correct input sequence
             # with the correct returned hypotheses.
             batch_hyp_strs = self.tokenizer.batch_decode(generated_ids.sequences.tolist(), skip_special_tokens=True)
-            batch_scores = generated_ids.sequences_scores.tolist()
+            batch_hyp_scores = generated_ids.sequences_scores.tolist()
             batch_source_strs = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=True)
 
             generated_strs = []
@@ -215,8 +214,10 @@ class InferenceSimplifier(pl.LightningModule):
                 else:
                     ref_str = None
 
-                hyps = batch_hyp_strs[batch_i:batch_i+self.args.batch_size]
-                scores = batch_scores[batch_i:batch_i+self.args.batch_size]
+                # subselect only those hyps/scores for the
+                # relevant src string
+                hyps = batch_hyp_strs[batch_i:batch_i+self.args.num_return_sequences]
+                scores = batch_hyp_scores[batch_i:batch_i+self.args.num_return_sequences]
 
                 output_dict = {
                     'src': src_str,
