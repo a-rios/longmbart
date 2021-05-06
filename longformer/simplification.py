@@ -12,7 +12,7 @@ from rouge_score import rouge_scorer
 import sacrebleu
 
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import TestTubeLogger
+from pytorch_lightning.loggers import TestTubeLogger, WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.overrides.data_parallel import LightningDistributedDataParallel
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
@@ -343,6 +343,7 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--tags_included", action='store_true', help="Text files already contain special tokens (language tags and </s>. Source:  src_tag seq, Target:  tgt_tag seq. Note: actual source sequence is seq src_tag </s>, will be changed internally after possibly clipping sequence to given max_length.")
         parser.add_argument("--max_output_len", type=int, default=256, help="maximum num of wordpieces/summary. Used for training and testing")
         parser.add_argument("--max_input_len", type=int, default=512, help="maximum num of wordpieces/summary. Used for training and testing")
+        parser.add_argument("--wandb", type=str, default=None, help="WandB project name to use if logging fine-tuning with WandB.")
         
         parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
         parser.add_argument("--num_workers", type=int, default=0, help="Number of data loader workers")
@@ -369,6 +370,7 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--lr_reduce_patience", type=int, default=8, help="Patience for LR reduction in Plateau scheduler.")
         parser.add_argument("--lr_reduce_factor", type=float, default=0.5, help="Learning rate reduce factor for Plateau scheduler.")
         parser.add_argument("--disable_checkpointing", action='store_true', help="No logging or checkpointing")
+        parser.add_argument("--save_top_k", type=int, default=5, help="Number of best checkpoints to keep. Others will be removed.")
         parser.add_argument('--grad_ckpt', action='store_true', help='Enable gradient checkpointing to save memory')
         
         ## inference params
@@ -403,16 +405,20 @@ def main(args):
   
     model.datasets = datasets.load_dataset('text', data_files={'train_source': args.train_source, 'train_target': args.train_target, 'val_source': args.val_source, 'val_target': args.val_target, 'test_source': args.test_source, 'test_target': args.test_target })
 
-    logger = TestTubeLogger(
-        save_dir=args.save_dir,
-        name=args.save_prefix,
-        version=0  # always use version=0
-    )
+    if args.wandb:
+        logger = WandbLogger(project=args.wandb)
+    else:
+        logger = TestTubeLogger(
+            save_dir=args.save_dir,
+            name=args.save_prefix,
+            version=0  # always use version=0
+        )
 
     print(args)
 
     model.lr_mode='max'
-    if args.early_stopping_metric == 'val_loss':
+    # if args.early_stopping_metric == 'val_loss':
+    if args.early_stopping_metric == 'vloss':
         model.lr_mode='min'
     early_stop_callback = EarlyStopping(monitor=args.early_stopping_metric, min_delta=0.00, patience=args.patience, verbose=True, mode=model.lr_mode) # metrics: val_loss, bleu, rougeL
     
@@ -420,12 +426,12 @@ def main(args):
     custom_checkpoint_path += ':.5f}'
   
     checkpoint_callback = ModelCheckpoint(
-    filepath=os.path.join(args.save_dir, args.save_prefix, custom_checkpoint_path),
-                        save_top_k=5,
-                        verbose=True,
-                        monitor=args.early_stopping_metric,
-                        mode=model.lr_mode,
-                        prefix='')
+        filepath=os.path.join(args.save_dir, args.save_prefix, custom_checkpoint_path),
+        save_top_k=args.save_top_k,
+        verbose=True,
+        monitor=args.early_stopping_metric,
+        mode=model.lr_mode,
+        prefix='')
 
     trainer = pl.Trainer(gpus=args.gpus, distributed_backend='ddp' if torch.cuda.is_available() else None,
                          track_grad_norm=-1,
