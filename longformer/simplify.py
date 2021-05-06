@@ -120,7 +120,7 @@ class InferenceSimplifier(pl.LightningModule):
         if tags_included:
             # remove tags from target text
             # print(gold_strs)
-            gold_strs = [' '.join(r.split(' ')[:-2]) for r in gold_strs]
+            gold_strs = [' '.join(r.split(' ')[1:]) for r in gold_strs]
             # print(gold_strs)  ## TODO fix
         scorer = rouge_scorer.RougeScorer(rouge_types=['rouge1', 'rouge2', 'rougeL', 'rougeLsum'], use_stemmer=False)
         rouge1 = rouge2 = rougel = rougelsum = 0.0
@@ -209,7 +209,7 @@ class InferenceSimplifier(pl.LightningModule):
             for batch_i in range(len(batch_source_strs)):
                 src_str = batch_source_strs[batch_i]
                 if self.args.test_target:
-                    ref_str = ' '.join(ref[batch_i].split(' ')[:-2]) if self.tags_included else ref[batch_i]
+                    ref_str = ' '.join(ref[batch_i].split(' ')[1:]) if self.tags_included else ref[batch_i]
                 else:
                     ref_str = None
 
@@ -368,7 +368,7 @@ def main(args):
         simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source, 'test_target': args.test_target })
     else:
         if args.tags_included and args.infer_target_tags:
-            # source texts must end in with a single valid language tag,
+            # source texts must start in with a single valid language tag,
             # e.g. de_DE, en_XX, etc.
             data_dict = datasets.load_dataset('text', data_files={'test_source': args.test_source})
             # datasets library allows loading from an
