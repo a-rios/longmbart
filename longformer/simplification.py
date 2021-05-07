@@ -55,6 +55,51 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=-100):
     loss = (1.0 - epsilon) * nll_loss + eps_i * smooth_loss
     return loss, nll_loss
 
+def prepare_input(input_ids, model, attention_mode, pad_token_id):
+        attention_mask = torch.ones(input_ids.shape, dtype=torch.long, device=input_ids.device)
+        attention_mask[input_ids == pad_token_id] = 0
+        if isinstance(model, MLongformerEncoderDecoderForConditionalGeneration):
+            attention_mask[:, -1] = 2  # put global attention on last token (target language tag), 1=attention, 0=padding, 2=global
+            if attention_mode == 'sliding_chunks':
+                half_padding_mod = model.config.attention_window[0]
+            elif attention_mode == 'sliding_chunks_no_overlap':
+                half_padding_mod = model.config.attention_window[0] / 2
+            else:
+                raise NotImplementedError
+            input_ids, attention_mask = pad_to_window_size(  # ideally, should be moved inside the LongformerModel
+                input_ids, attention_mask, half_padding_mod, pad_token_id)
+        return input_ids, attention_mask
+
+def get_eval_scores(ref, generated_strs, tags_included=False, vloss=None):
+        if vloss is None:
+            vloss = torch.zeros(len(ref))
+        if tags_included:
+            # remove tags from target text
+            # print(gold_strs)
+            gold_strs = [' '.join(r.split(' ')[1:]) for r in ref]
+            # print(gold_strs)  ## TODO fix
+        scorer = rouge_scorer.RougeScorer(rouge_types=['rouge1', 'rouge2', 'rougeL', 'rougeLsum'], use_stemmer=False)
+        rouge1 = rouge2 = rougel = rougelsum = 0.0
+        for ref, pred in zip(gold_strs, generated_strs):
+            score = scorer.score(ref, pred)
+            rouge1 += score['rouge1'].fmeasure
+            rouge2 += score['rouge2'].fmeasure
+            rougel += score['rougeL'].fmeasure
+            rougelsum += score['rougeLsum'].fmeasure
+        rouge1 /= len(generated_strs)
+        rouge2 /= len(generated_strs)
+        rougel /= len(generated_strs)
+        rougelsum /= len(generated_strs)
+        bleu = sacrebleu.corpus_bleu(generated_strs, [gold_strs])
+
+        return {'vloss': vloss,
+                'rouge1': vloss.new_zeros(1) + rouge1,
+                'rouge2': vloss.new_zeros(1) + rouge2,
+                'rougeL': vloss.new_zeros(1) + rougel,
+                'rougeLsum': vloss.new_zeros(1) + rougelsum,
+                'bleu' : vloss.new_zeros(1) + bleu.score,
+                'decoded' : generated_strs}
+
 
 class SimplificationDataset(Dataset):
     def __init__(self, inputs, labels, name, tokenizer, max_input_len, max_output_len, src_lang, tgt_lang, tags_included):
@@ -134,23 +179,8 @@ class Simplifier(pl.LightningModule):
         self.config.attention_mode = self.args.attention_mode
         self.config.attention_window = [self.args.attention_window] * self.config.encoder_layers
 
-    def _prepare_input(self, input_ids):
-        attention_mask = torch.ones(input_ids.shape, dtype=torch.long, device=input_ids.device)
-        attention_mask[input_ids == self.tokenizer.pad_token_id] = 0
-        if isinstance(self.model, MLongformerEncoderDecoderForConditionalGeneration):
-            attention_mask[:, -1] = 2  # put global attention on last token (target language tag), 1=attention, 0=padding, 2=global
-            if self.args.attention_mode == 'sliding_chunks':
-                half_padding_mod = self.model.config.attention_window[0]
-            elif self.args.attention_mode == 'sliding_chunks_no_overlap':
-                half_padding_mod = self.model.config.attention_window[0] / 2
-            else:
-                raise NotImplementedError
-            input_ids, attention_mask = pad_to_window_size(  # ideally, should be moved inside the LongformerModel
-                input_ids, attention_mask, half_padding_mod, self.tokenizer.pad_token_id)
-        return input_ids, attention_mask
-
     def forward(self, input_ids, output_ids):
-        input_ids, attention_mask = self._prepare_input(input_ids)
+        input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id)
         decoder_input_ids = shift_tokens_right(output_ids, self.config.pad_token_id) # (in: output_ids, eos_token_id, tgt_lang_id out: tgt_lang_id, output_ids, eos_token_id)
         labels = decoder_input_ids[:, 1:].clone()
         decoder_input_ids = decoder_input_ids[:, :-1] # without eos/last pad
@@ -193,7 +223,7 @@ class Simplifier(pl.LightningModule):
         outputs = self.forward(*batch)
         vloss = outputs[0]
         input_ids, output_ids = batch
-        input_ids, attention_mask = self._prepare_input(input_ids)
+        input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id)
         if self.tags_included:
             # get list of target language tags
             # output_ids (batch_size, seq_len), with padding
@@ -210,19 +240,8 @@ class Simplifier(pl.LightningModule):
         generated_str = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=True)
         
         gold_str = self.tokenizer.batch_decode(output_ids.tolist(), skip_special_tokens=True, clean_up_tokenization_spaces=True)
-        scorer = rouge_scorer.RougeScorer(rouge_types=['rouge1', 'rouge2', 'rougeL', 'rougeLsum'], use_stemmer=False)
-        rouge1 = rouge2 = rougel = rougelsum = 0.0
-        for ref, pred in zip(gold_str, generated_str):
-            score = scorer.score(ref, pred)
-            rouge1 += score['rouge1'].fmeasure
-            rouge2 += score['rouge2'].fmeasure
-            rougel += score['rougeL'].fmeasure
-            rougelsum += score['rougeLsum'].fmeasure
-        rouge1 /= len(generated_str)
-        rouge2 /= len(generated_str)
-        rougel /= len(generated_str)
-        rougelsum /= len(generated_str)
-        bleu = sacrebleu.corpus_bleu(generated_str, [gold_str])
+        # get scores as dict
+        scores = get_eval_scores(gold_str, generated_str, self.tags_included, vloss)
         
         outfile = self.args.save_dir + "/" + args.save_prefix + "/_val_out_checkpoint_" + str(self.current_checkpoint)
 
@@ -230,19 +249,13 @@ class Simplifier(pl.LightningModule):
             for sample in generated_str:
                 f.write(sample + "\n")
         self.log('vloss', vloss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('bleu', vloss.new_zeros(1) + bleu.score, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('rouge1', vloss.new_zeros(1) + rouge1, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('rouge2', vloss.new_zeros(1) + rouge2, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('rougeL', vloss.new_zeros(1) + rougel, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('rougeLsum', vloss.new_zeros(1) + rougelsum, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('bleu', scores['bleu'], on_step=False, on_epoch=True, prog_bar=True)
+        self.log('rouge1', scores['rouge1'], on_step=False, on_epoch=True, prog_bar=True)
+        self.log('rouge2', scores['rouge2'], on_step=False, on_epoch=True, prog_bar=True)
+        self.log('rougeL', scores['rougeL'], on_step=False, on_epoch=True, prog_bar=True)
+        self.log('rougeLsum', scores['rougeLsum'], on_step=False, on_epoch=True, prog_bar=True)
         
-        return {'vloss': vloss,
-                'rouge1': vloss.new_zeros(1) + rouge1,
-                'rouge2': vloss.new_zeros(1) + rouge2,
-                'rougeL': vloss.new_zeros(1) + rougel,
-                'rougeLsum': vloss.new_zeros(1) + rougelsum, 
-                'bleu' : vloss.new_zeros(1) + bleu.score,
-                'decoded' : generated_str}
+        return scores
 
     def validation_epoch_end(self, outputs):
         for p in self.model.parameters():

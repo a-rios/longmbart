@@ -323,21 +323,21 @@ def main():
     print(tokenizer.lang_code_to_id)
 
     ## check embeddings
-    #print("de_DE embed ", model.model.shared.weight[tokenizer.convert_tokens_to_ids("de_DE")])
-    #print("de_A1 embed ", model.model.shared.weight[tokenizer.convert_tokens_to_ids("de_A1")])
-    #print("de_A2 embed ", model.model.shared.weight[tokenizer.convert_tokens_to_ids("de_A2")])
-    #print("de_B1 embed ", model.model.shared.weight[tokenizer.convert_tokens_to_ids("de_B1")])
+    if args.add_language_tags is not None and args.initialize_tags is not None:
+        for new_tag, init_tag in zip(args.add_language_tags, args.initialize_tags):
+            print("original language embedding for {}: {}".format(init_tag, model.model.shared.weight[tokenizer.convert_tokens_to_ids(init_tag)]))
+            print("initialized {} with embedding: {}".format(new_tag, model.model.shared.weight[tokenizer.convert_tokens_to_ids(new_tag)]))
 
     if args.verbose > 0:
-        TXT = "Das ist ein Test. </s> de_DE"
-        TXT2 = "Noch ein Test. </s> de_DE"
+        TXT = "de_DE Das ist ein Test."
+        TXT2 = "de_DE Noch ein Test."
         print("string in pieces ", tokenizer.sp_model.encode(TXT, out_type=str))
         print("string in ids ", tokenizer.sp_model.encode(TXT, out_type=int))
-        TXT3 = "en_XX this is a test. </s> en_XX"
-        TXT4 = "es_XX otro ejemplo </s> es_XX"
+        TXT3 = "en_XX this is a test."
+        TXT4 = "es_XX otro ejemplo."
 
     if args.verbose > 1:
-        ## input = sequence X </s> src_lang, label = sequence tgt_lang X </s> tgt_lang
+        ## input = src_lang sequence, target = tgt_lang sequence
         tgt_texts = [TXT3, TXT4]
         batch: dict = tokenizer.prepare_seq2seq_batch(src_texts=[TXT, TXT2], max_length=2048, truncation=False, padding="max_length", return_tensors="pt", tags_included=True)
         print(batch)

@@ -33,6 +33,7 @@ import datasets
 import collections
 
 from . import simplification
+from longformer.simplification import prepare_input, get_eval_scores
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -98,57 +99,13 @@ class InferenceSimplifier(pl.LightningModule):
         self.max_input_len = self.args.max_input_len if self.args.max_input_len is not None else self.config.max_encoder_position_embeddings
         self.max_output_len = self.args.max_output_len if self.args.max_output_len is not None else self.config.max_decoder_position_embeddings 
         self.test_dataloader_object = None
-
-    def _prepare_input(self, input_ids):
-        attention_mask = torch.ones(input_ids.shape, dtype=torch.long, device=input_ids.device)
-        attention_mask[input_ids == self.tokenizer.pad_token_id] = 0
-        if isinstance(self.model, MLongformerEncoderDecoderForConditionalGeneration):
-            attention_mask[:, -1] = 2  # put global attention on last token (target language tag)
-            if self.config.attention_mode == 'sliding_chunks':
-                half_padding_mod = self.model.config.attention_window[0]
-            elif self.config.attention_mode == 'sliding_chunks_no_overlap':
-                half_padding_mod = self.model.config.attention_window[0] / 2
-            else:
-                raise NotImplementedError
-            input_ids, attention_mask = pad_to_window_size(  # ideally, should be moved inside the LongformerModel
-                input_ids, attention_mask, half_padding_mod, self.tokenizer.pad_token_id)
-        return input_ids, attention_mask
-
-    @staticmethod
-    def get_eval_scores(ref, generated_strs, tags_included=False,):
-        gold_strs = [r for r in ref]
-        if tags_included:
-            # remove tags from target text
-            # print(gold_strs)
-            gold_strs = [' '.join(r.split(' ')[1:]) for r in gold_strs]
-            # print(gold_strs)  ## TODO fix
-        scorer = rouge_scorer.RougeScorer(rouge_types=['rouge1', 'rouge2', 'rougeL', 'rougeLsum'], use_stemmer=False)
-        rouge1 = rouge2 = rougel = rougelsum = 0.0
-        for ref, pred in zip(gold_strs, generated_strs):
-            score = scorer.score(ref, pred)
-            rouge1 += score['rouge1'].fmeasure
-            rouge2 += score['rouge2'].fmeasure
-            rougel += score['rougeL'].fmeasure
-            rougelsum += score['rougeLsum'].fmeasure
-        rouge1 /= len(generated_strs)
-        rouge2 /= len(generated_strs)
-        rougel /= len(generated_strs)
-        rougelsum /= len(generated_strs)
-        bleu = sacrebleu.corpus_bleu(generated_strs, [gold_strs])
-    
-        return {'rouge1': rouge1,
-                'rouge2': rouge2,
-                'rougeL': rougel,
-                'rougeLsum':  rougelsum, 
-                'bleu' :  bleu.score,
-                'decoded' : generated_strs}
     
     def test_step(self, batch, batch_nb):
         for p in self.model.parameters():
             p.requires_grad = False
 
         input_ids, ref, tags  = batch
-        input_ids, attention_mask = self._prepare_input(input_ids)
+        input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id)
         if self.tags_included:
             assert (ref[0] is not None or tags[0] is not None), "Need either reference with target labels or list of target labels with --tags-included (multilingual batches)"
             if  ref[0] is not None:
@@ -192,7 +149,7 @@ class InferenceSimplifier(pl.LightningModule):
                     f.write(sample + "\n")
             
             if self.args.test_target is not None:
-                return self.get_eval_scores(ref, generated_strs, self.tags_included)
+                return get_eval_scores(ref, generated_strs, self.tags_included)
             else:
                 return {'decoded' : generated_strs}
         
