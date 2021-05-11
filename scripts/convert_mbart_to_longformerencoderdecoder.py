@@ -89,7 +89,7 @@ def create_long_model(
             new_embed_weight = model.model.shared.weight.new_empty(new_vocab_size, model_size)
             ## need to reduce final_logits_bias too
             final_logits_bias_original = model.final_logits_bias.transpose(0,1) # (1, vocab_size)
-            final_logits_bias_new = final_logits_bias_original.new_empty(new_vocab_size,1)
+            final_logits_bias_new = final_logits_bias_original.new_empty(new_vocab_size,1) # TODO: this seems to be just all zeros?
 
             ## keep order same as in original vocab.. iterate over 250k entries
             added_vocab_length = len(tokenizer.lang_code_to_id) + tokenizer.fairseq_offset + 1
@@ -150,6 +150,7 @@ def create_long_model(
             ## fill in additional vocab positions (language ids etc)
             for i in range(1,added_vocab_length):
                 new_embed_weight[base_vocab_length_new+i] = original_embed_weight[base_vocab_length_original+i]
+                final_logits_bias_new[base_vocab_length_new+i] = final_logits_bias_original[base_vocab_length_original+i]
                 #print("position in new tensor ", base_vocab_length_new+i)
                 #print("position in old tensor ", base_vocab_length_original+i)
                 #print("embed ", new_embed_weight[base_vocab_length_new+i])
@@ -292,6 +293,8 @@ def main():
         print(embed_weight.shape)
         ## need to reduce final_logits_bias too
         final_logits_bias = model.final_logits_bias.transpose(0,1) # (1, vocab_size)
+        #print("new model, logits bias ", final_logits_bias)
+        #print("new model, logits bias non zero", final_logits_bias.nonzero())
 
         print(tokenizer._additional_special_tokens)
         print("tokenizer orig len ", tokenizer.vocab_size)
@@ -318,9 +321,9 @@ def main():
         print("saving model with new tags")
         model.save_pretrained(args.save_model_to)
 
-    print(tokenizer.special_tokens_map)
-    print(tokenizer.id_to_lang_code)
-    print(tokenizer.lang_code_to_id)
+    print("special tokens map ", tokenizer.special_tokens_map)
+    print("id-to-lang-code ",tokenizer.id_to_lang_code)
+    print("lang-code-to-id", tokenizer.lang_code_to_id)
 
     ## check embeddings
     if args.add_language_tags is not None and args.initialize_tags is not None:
@@ -329,30 +332,32 @@ def main():
             print("initialized {} with embedding: {}".format(new_tag, model.model.shared.weight[tokenizer.convert_tokens_to_ids(new_tag)]))
 
     if args.verbose > 0:
+        tokenizer = MBartTokenizer.from_pretrained(args.save_model_to)
         TXT = "de_DE Das ist ein Test."
         TXT2 = "de_DE Noch ein Test."
-        print("string in pieces ", tokenizer.sp_model.encode(TXT, out_type=str))
-        print("string in ids ", tokenizer.sp_model.encode(TXT, out_type=int))
+        #print("string in pieces ", tokenizer.sp_model.encode(TXT, out_type=str))
+        #print("string in ids ", tokenizer.sp_model.encode(TXT, out_type=int))
         TXT3 = "en_XX this is a test."
         TXT4 = "es_XX otro ejemplo."
 
-    if args.verbose > 1:
-        ## input = src_lang sequence, target = tgt_lang sequence
-        tgt_texts = [TXT3, TXT4]
-        batch: dict = tokenizer.prepare_seq2seq_batch(src_texts=[TXT, TXT2], max_length=2048, truncation=False, padding="max_length", return_tensors="pt", tags_included=True)
-        print(batch)
-        #decoder_start_token_ids = [ tokenizer.lang_code_to_id[sample.split(' ')[-1]] for sample in tgt_texts]
-        decoder_start_token_ids = [tokenizer.lang_code_to_id["de_A1"], tokenizer.lang_code_to_id["de_B1"]]
-        decoder_start_token_ids = torch.tensor(decoder_start_token_ids)
-        print(decoder_start_token_ids)
-        translated_tokens = model.generate(**batch, decoder_start_token_ids=decoder_start_token_ids, use_cache=True, num_beams=2)
-        translation = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
-        print(translation)
+        if args.verbose > 1:
+            ## input = src_lang sequence, target = tgt_lang sequence
+            tgt_texts = [TXT3, TXT4]
+            batch: dict = tokenizer.prepare_seq2seq_batch(src_texts=[TXT, TXT2], max_length=2048, truncation=False, padding="max_length", return_tensors="pt", tags_included=True)
+            print(batch)
 
-        batch: dict = tokenizer.prepare_seq2seq_batch(src_texts=[TXT, TXT2], src_lang="de_DE", max_length=2048, truncation=False, padding="max_length", return_tensors="pt",  tags_included=True)
-        translated_tokens = model.generate(**batch, decoder_start_token_id=tokenizer.lang_code_to_id["es_XX"], use_cache=True, num_beams=2)
-        translation = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
-        print(translation)
+            #decoder_start_token_ids = [ tokenizer.lang_code_to_id[sample.split(' ')[-1]] for sample in tgt_texts]
+            decoder_start_token_ids = [tokenizer.lang_code_to_id["de_A1"], tokenizer.lang_code_to_id["de_B1"]]
+            decoder_start_token_ids = torch.tensor(decoder_start_token_ids)
+            print("decoder start ids ", decoder_start_token_ids)
+            translated_tokens = model.generate(**batch, decoder_start_token_ids=decoder_start_token_ids, use_cache=True, num_beams=2)
+            translation = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
+            print(translation)
+
+            batch: dict = tokenizer.prepare_seq2seq_batch(src_texts=[TXT, TXT2], src_lang="de_DE", max_length=2048, truncation=False, padding="max_length", return_tensors="pt",  tags_included=True)
+            translated_tokens = model.generate(**batch, decoder_start_token_id=tokenizer.lang_code_to_id["es_XX"], use_cache=True, num_beams=2, max_length=20)
+            translation = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
+            print(translation)
 
 if __name__ == "__main__":
     main()
