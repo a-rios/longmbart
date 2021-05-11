@@ -55,12 +55,21 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=-100):
     loss = (1.0 - epsilon) * nll_loss + eps_i * smooth_loss
     return loss, nll_loss
 
-def prepare_input(input_ids, model, attention_mode, pad_token_id):
+def prepare_input(input_ids, model, attention_mode, pad_token_id, global_attention_indices):
         attention_mask = torch.ones(input_ids.shape, dtype=torch.long, device=input_ids.device)
+        # attention longformer: 1 local, 2 global, 0 none
         attention_mask[input_ids == pad_token_id] = 0
+        index_of_last_nonpad = (attention_mask.ne(0).sum(dim=1) - 1).squeeze(-1)
         if isinstance(model, MLongformerEncoderDecoderForConditionalGeneration):
-            # new: sequence is tgt_lang_id x eos pad
-            attention_mask[:, 0] = 2  # put global attention on last token (target language tag), 1=attention, 0=padding, 2=global
+            for glob_i in global_attention_indices:
+                ## negative indices: discount from index_of_last_nonpad (only need to do this if batch_size > 1, otherwise there is no padding at this point and we can just use the negative indices directly
+                if glob_i < 0 and input_ids.shape[0] > 1:
+                    for i, last_nonpad in enumerate(index_of_last_nonpad): # i: iterator over samples in batch
+                        glob = int(last_nonpad) + glob_i +1
+                        attention_mask[i][int(glob)] = 2
+                # indices > 0
+                else:
+                    attention_mask[:, glob_i] = 2
             if attention_mode == 'sliding_chunks':
                 half_padding_mod = model.config.attention_window[0]
             elif attention_mode == 'sliding_chunks_no_overlap':
@@ -181,7 +190,7 @@ class Simplifier(pl.LightningModule):
         self.config.attention_window = [self.args.attention_window] * self.config.encoder_layers
 
     def forward(self, input_ids, output_ids):
-        input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id)
+        input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id, self.args.global_attention_indices)
         decoder_input_ids = shift_tokens_right(output_ids, self.config.pad_token_id) # (in: output_ids, eos_token_id, tgt_lang_id out: tgt_lang_id, output_ids, eos_token_id)
         labels = decoder_input_ids[:, 1:].clone()
         decoder_input_ids = decoder_input_ids[:, :-1] # without eos/last pad
@@ -224,7 +233,7 @@ class Simplifier(pl.LightningModule):
         outputs = self.forward(*batch)
         vloss = outputs[0]
         input_ids, output_ids = batch
-        input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id)
+        input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id, self.args.global_attention_indices)
         if self.tags_included:
             # get list of target language tags
             # output_ids (batch_size, seq_len), with padding
@@ -372,6 +381,7 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--attention_mode", type=str, default='sliding_chunks', help="Longformer attention mode")
         parser.add_argument("--attention_window", type=int, default=512, help="Attention window")
         parser.add_argument("--label_smoothing", type=float, default=0.0, required=False)
+        parser.add_argument("--global_attention_indices", type=int, nargs='+', default=[-1], required=False, help="List of indices of positions with global attention for longformer attention. Supports negative indices (-1 == last non-padding token). Default: [-1] == last source token (==lang_id) .")
         
         # Optimization params:
         #parser.add_argument("--warmup", type=int, default=1000, help="Number of warmup steps")

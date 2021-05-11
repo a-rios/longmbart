@@ -105,7 +105,7 @@ class InferenceSimplifier(pl.LightningModule):
             p.requires_grad = False
 
         input_ids, ref, tags  = batch
-        input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id)
+        input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id, self.args.global_attention_indices)
         if self.tags_included:
             assert (ref[0] is not None or tags[0] is not None), "Need either reference with target labels or list of target labels with --tags-included (multilingual batches)"
             if  ref[0] is not None:
@@ -278,7 +278,8 @@ class InferenceSimplifier(pl.LightningModule):
         parser.add_argument("--translation", type=str, default='decoded.out', help="Output file to write decoded sequence to.")
         parser.add_argument("--beam_size", type=int, default=4, help="Beam size for inference when testing/validating. Default: 4.")
         parser.add_argument("--test_percent_check", default=1.00, type=float, help='Percent of test data used')
-        
+        parser.add_argument("--global_attention_indices", type=int, nargs='+', default=[-1], required=False, help="List of indices of positions with global attention for longformer attention. Supports negative indices (-1 == last non-padding token). Default: [-1] == last source token (==lang_id) .")
+
         parser.add_argument("--output_to_json", default=False, action="store_true", help='If true, decoding output is a verbose JSONL containing, src, tgt, and scored model output hyps')
         
         # decoding strategy params (passed to model.generate() (in generation_utils.py))
