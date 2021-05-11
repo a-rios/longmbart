@@ -59,7 +59,8 @@ def prepare_input(input_ids, model, attention_mode, pad_token_id):
         attention_mask = torch.ones(input_ids.shape, dtype=torch.long, device=input_ids.device)
         attention_mask[input_ids == pad_token_id] = 0
         if isinstance(model, MLongformerEncoderDecoderForConditionalGeneration):
-            attention_mask[:, -1] = 2  # put global attention on last token (target language tag), 1=attention, 0=padding, 2=global
+            # new: sequence is tgt_lang_id x eos pad
+            attention_mask[:, 0] = 2  # put global attention on last token (target language tag), 1=attention, 0=padding, 2=global
             if attention_mode == 'sliding_chunks':
                 half_padding_mod = model.config.attention_window[0]
             elif attention_mode == 'sliding_chunks_no_overlap':
