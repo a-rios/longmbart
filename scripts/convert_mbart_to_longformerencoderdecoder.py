@@ -29,7 +29,6 @@ def create_long_model(
     cache_dir,
     reduce_to_vocab,
     print_params,
-    user_special_tokens=None,
 ):
     """
     replaces standard self-attention with longformer attention
@@ -90,12 +89,8 @@ def create_long_model(
                     #print(piece)
                 #print(keep_pieces)
 
-            # breakpoint()
-
             ##TODO clean up pieces vocabulary more
             num_special_tokens = 4 # <unk>, <s>, </s> <pad>
-            # if user_special_tokens:
-                # num_special_tokens += len(user_special_tokens)
             new_vocab_size = len(keep_pieces) + num_special_tokens + len(tokenizer.lang_code_to_id) + tokenizer.fairseq_offset + 1 # for mask token
             new_embed_weight = model.model.shared.weight.new_empty(new_vocab_size, model_size)
             ## need to reduce final_logits_bias too
@@ -311,7 +306,6 @@ def main():
         cache_dir=args.cache_dir,
         reduce_to_vocab=args.reduce_to_vocab,
         print_params=args.print_params,
-        user_special_tokens=user_special_tokens,
     )
     
     tokenizer = MBartTokenizer.from_pretrained(args.save_model_to)
