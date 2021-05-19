@@ -104,25 +104,19 @@ class InferenceSimplifier(pl.LightningModule):
         for p in self.model.parameters():
             p.requires_grad = False
 
-#        test_doc = "de_DE Dies ist ein Mensch."
-#        batch: dict = self.tokenizer.prepare_seq2seq_batch(src_texts=[test_doc], max_length=2084, truncation=False, padding="max_length", return_tensors="pt", tags_included=True)
-#        translation1 = self.model.generate(**batch, decoder_start_token_id=20031, num_beams=2)
-#        print(translation1)
-#        print(self.tokenizer.batch_decode(translation1, skip_special_tokens=True)[0])
-
-
         input_ids, ref, tags = batch
-#        print(input_ids)
         input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id, self.args.global_attention_indices)
-#        print(input_ids)
-#        bad_words = [line.split() for line in open(self.args.bad_words, 'r').readlines()]
-        bad_words = ['Test', ' Test']
-        bad_words_bpe = [self.tokenizer.tokenize(bad_word) for bad_word in bad_words]
-        bad_words_ids = [self.tokenizer.convert_tokens_to_ids(word) for word in bad_words_bpe]
-#        bad_words = [' ' + word for word in bad_words]
-#        print(bad_words)
-#        bad_words_ids = [self.tokenizer(bad_word).input_ids for bad_word in bad_words]
-#        print(bad_words_ids)
+
+        if self.args.bad_words is not None:
+            bad_words = [line.strip() for line in open(self.args.bad_words, 'r').readlines() if len(line.strip()) > 0]
+#            bad_words = ['Test', ' Test']
+            bad_words_bpe = [self.tokenizer.tokenize(bad_word) for bad_word in bad_words]
+            bad_words_ids = [self.tokenizer.convert_tokens_to_ids(word) for word in bad_words_bpe]
+            for i in range (len(bad_words_ids)):
+                if len(bad_words_ids[i]) < 1: print(i, bad_words[i])
+        else:
+            bad_words_ids = None
+
         if self.tags_included:
             assert (ref[0] is not None or tags[0] is not None), "Need either reference with target labels or list of target labels with --tags-included (multilingual batches)"
             if  ref[0] is not None:
@@ -132,7 +126,6 @@ class InferenceSimplifier(pl.LightningModule):
                 tgt_ids = [self.tokenizer.lang_code_to_id[sample.split(' ')[0]]  for sample in tags ]
 
             decoder_start_token_ids = torch.tensor(tgt_ids, dtype=input_ids.dtype, device=input_ids.device).unsqueeze(1)
-            print('generate 1')
             generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
                                             use_cache=True, max_length=self.args.max_output_len,
                                             num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_ids=decoder_start_token_ids,
@@ -147,7 +140,6 @@ class InferenceSimplifier(pl.LightningModule):
                                             return_dict_in_generate=True if self.args.output_to_json else self.args.return_dict_in_generate,
                                             bad_words_ids=bad_words_ids)
         else:
-            print('generate 2')
             generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
                                             use_cache=True, max_length=self.max_input_len,
                                             num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_id=self.tokenizer.lang_code_to_id[self.tgt_lang],
@@ -163,10 +155,8 @@ class InferenceSimplifier(pl.LightningModule):
                                             bad_words_ids=bad_words_ids)
 
         if not self.args.output_to_json:
-#            print(generated_ids)
+
             generated_strs = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=True)
-#            print('Test')
-#            print(generated_strs)
             with open(self.args.translation, 'a') as f:
                 for sample in generated_strs:
                     f.write(sample + "\n")
