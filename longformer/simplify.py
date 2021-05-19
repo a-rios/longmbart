@@ -117,9 +117,11 @@ class InferenceSimplifier(pl.LightningModule):
 #        print(input_ids)
 #        bad_words = [line.split() for line in open(self.args.bad_words, 'r').readlines()]
         bad_words = ['Test', ' Test']
+        bad_words_bpe = [self.tokenizer.tokenize(bad_word) for bad_word in bad_words]
+        bad_words_ids = [self.tokenizer.convert_tokens_to_ids(word) for word in bad_words_bpe]
 #        bad_words = [' ' + word for word in bad_words]
-        print(bad_words)
-        bad_words_ids = [self.tokenizer(bad_word).input_ids for bad_word in bad_words]
+#        print(bad_words)
+#        bad_words_ids = [self.tokenizer(bad_word).input_ids for bad_word in bad_words]
 #        print(bad_words_ids)
         if self.tags_included:
             assert (ref[0] is not None or tags[0] is not None), "Need either reference with target labels or list of target labels with --tags-included (multilingual batches)"
