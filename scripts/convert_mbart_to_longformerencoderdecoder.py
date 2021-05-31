@@ -339,8 +339,6 @@ def main():
         model.model.shared.weight.data = embed_weight
         model.config.vocab_size = embed_weight.shape[0]
 
-    breakpoint()
-
     if user_special_tokens:
         # https://huggingface.co/transformers/internal/tokenization_utils.html?highlight=add_tokens
         num_added_toks = tokenizer.add_tokens(user_special_tokens, special_tokens=True)
