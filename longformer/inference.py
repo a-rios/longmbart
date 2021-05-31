@@ -32,8 +32,8 @@ from longformer.longformer_encoder_decoder_mbart import MLongformerEncoderDecode
 import datasets
 import collections
 
-from . import simplification
-from longformer.simplification import prepare_input, get_eval_scores
+from . import train
+from longformer.train import prepare_input, get_eval_scores
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
