@@ -1,3 +1,5 @@
+## TODO: remove redundancies from LongmBART
+
 import os
 import argparse
 import random
@@ -5,9 +7,6 @@ import numpy as np
 
 import torch
 from torch.utils.data import DataLoader, Dataset
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoConfig
-from transformers.optimization import get_linear_schedule_with_warmup, Adafactor
-import nlp
 from rouge_score import rouge_scorer
 import sacrebleu
 
@@ -17,16 +16,9 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.overrides.data_parallel import LightningDistributedDataParallel
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
-
-from longformer import LongformerEncoderDecoderForConditionalGeneration, LongformerEncoderDecoderConfig
-from longformer.sliding_chunks import pad_to_window_size
-
 import logging
-from transformers import MBartTokenizer
-from transformers import MBartForConditionalGeneration
+from transformers import MBartTokenizer, MBartForConditionalGeneration, MBartConfig
 from transformers.models.mbart.modeling_mbart import shift_tokens_right
-from longformer.longformer_encoder_decoder import LongformerSelfAttentionForBart
-from longformer.longformer_encoder_decoder_mbart import MLongformerEncoderDecoderForConditionalGeneration, MLongformerEncoderDecoderConfig, TrimMBARTForConditionalGeneration, TrimMBARTConfig
 import datasets
 
 logger = logging.getLogger(__name__)
@@ -55,60 +47,39 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=-100):
     loss = (1.0 - epsilon) * nll_loss + eps_i * smooth_loss
     return loss, nll_loss
 
-def prepare_input(input_ids, model, attention_mode, pad_token_id, global_attention_indices):
-        attention_mask = torch.ones(input_ids.shape, dtype=torch.long, device=input_ids.device)
-        # attention longformer: 1 local, 2 global, 0 none
-        attention_mask[input_ids == pad_token_id] = 0
-        index_of_last_nonpad = (attention_mask.ne(0).sum(dim=1) - 1).squeeze(-1)
-        if isinstance(model, MLongformerEncoderDecoderForConditionalGeneration):
-            for glob_i in global_attention_indices:
-                ## negative indices: discount from index_of_last_nonpad (only need to do this if batch_size > 1, otherwise there is no padding at this point and we can just use the negative indices directly
-                if glob_i < 0 and input_ids.shape[0] > 1:
-                    for i, last_nonpad in enumerate(index_of_last_nonpad): # i: iterator over samples in batch
-                        glob = int(last_nonpad) + glob_i +1
-                        attention_mask[i][int(glob)] = 2
-                # indices > 0
-                else:
-                    attention_mask[:, glob_i] = 2
-            if attention_mode == 'sliding_chunks':
-                half_padding_mod = model.config.attention_window[0]
-            elif attention_mode == 'sliding_chunks_no_overlap':
-                half_padding_mod = model.config.attention_window[0] / 2
-            else:
-                raise NotImplementedError
-            input_ids, attention_mask = pad_to_window_size(  # ideally, should be moved inside the LongformerModel
-                input_ids, attention_mask, half_padding_mod, pad_token_id)
-        return input_ids, attention_mask
+def prepare_input(input_ids, pad_token_id):
+    attention_mask = torch.ones(input_ids.shape, dtype=torch.long, device=input_ids.device)
+    attention_mask[input_ids == pad_token_id] = 0
+    return input_ids, attention_mask
 
 def get_eval_scores(ref, generated_strs, tags_included=False, vloss=None):
-        if vloss is None:
-            vloss = torch.zeros(len(ref))
-        if tags_included:
-            # remove tags from target text
-            # print(gold_strs)
-            gold_strs = [' '.join(r.split(' ')[1:]) for r in ref]
-            # print(gold_strs)  ## TODO fix
-        scorer = rouge_scorer.RougeScorer(rouge_types=['rouge1', 'rouge2', 'rougeL', 'rougeLsum'], use_stemmer=False)
-        rouge1 = rouge2 = rougel = rougelsum = 0.0
-        for ref, pred in zip(gold_strs, generated_strs):
-            score = scorer.score(ref, pred)
-            rouge1 += score['rouge1'].fmeasure
-            rouge2 += score['rouge2'].fmeasure
-            rougel += score['rougeL'].fmeasure
-            rougelsum += score['rougeLsum'].fmeasure
-        rouge1 /= len(generated_strs)
-        rouge2 /= len(generated_strs)
-        rougel /= len(generated_strs)
-        rougelsum /= len(generated_strs)
-        bleu = sacrebleu.corpus_bleu(generated_strs, [gold_strs])
+    if vloss is None:
+        vloss = torch.zeros(len(ref))
+    if tags_included:
+        # remove tags from target text
+        # print(gold_strs)
+        gold_strs = [' '.join(r.split(' ')[1:]) for r in ref]
+    scorer = rouge_scorer.RougeScorer(rouge_types=['rouge1', 'rouge2', 'rougeL', 'rougeLsum'], use_stemmer=False)
+    rouge1 = rouge2 = rougel = rougelsum = 0.0
+    for ref, pred in zip(gold_strs, generated_strs):
+        score = scorer.score(ref, pred)
+        rouge1 += score['rouge1'].fmeasure
+        rouge2 += score['rouge2'].fmeasure
+        rougel += score['rougeL'].fmeasure
+        rougelsum += score['rougeLsum'].fmeasure
+    rouge1 /= len(generated_strs)
+    rouge2 /= len(generated_strs)
+    rougel /= len(generated_strs)
+    rougelsum /= len(generated_strs)
+    bleu = sacrebleu.corpus_bleu(generated_strs, [gold_strs])
 
-        return {'vloss': vloss,
-                'rouge1': vloss.new_zeros(1) + rouge1,
-                'rouge2': vloss.new_zeros(1) + rouge2,
-                'rougeL': vloss.new_zeros(1) + rougel,
-                'rougeLsum': vloss.new_zeros(1) + rougelsum,
-                'bleu' : vloss.new_zeros(1) + bleu.score,
-                'decoded' : generated_strs}
+    return {'vloss': vloss,
+            'rouge1': vloss.new_zeros(1) + rouge1,
+            'rouge2': vloss.new_zeros(1) + rouge2,
+            'rougeL': vloss.new_zeros(1) + rougel,
+            'rougeLsum': vloss.new_zeros(1) + rougelsum,
+            'bleu' : vloss.new_zeros(1) + bleu.score,
+            'decoded' : generated_strs}
 
 
 class SimplificationDataset(Dataset):
@@ -173,7 +144,7 @@ class Simplifier(pl.LightningModule):
         self.save_hyperparameters()
         
     def _load_pretrained(self):
-        self.model = TrimMBARTForConditionalGeneration.from_pretrained(self.args.from_pretrained, config=self.config)
+        self.model = MBartForConditionalGeneration.from_pretrained(self.args.from_pretrained, config=self.config)
         self.tokenizer = MBartTokenizer.from_pretrained(self.args.tokenizer, use_fast=True)
         if self.tags_included:
             self.model.config.decoder_start_token_id = -1
@@ -181,16 +152,16 @@ class Simplifier(pl.LightningModule):
             self.model.config.decoder_start_token_id = self.tokenizer.lang_code_to_id[self.tgt_lang]
     
     def _set_config(self):
-        self.config = TrimMBARTConfig.from_pretrained(self.args.from_pretrained)
+        self.config = MBartConfig.from_pretrained(self.args.from_pretrained)
         self.config.attention_dropout = self.args.attention_dropout
         self.config.dropout = self.args.dropout
         self.config.activation_dropout = self.args.activation_dropout
         self.config.gradient_checkpointing = self.args.grad_ckpt
-        self.config.attention_mode = self.args.attention_mode
-        self.config.attention_window = [self.args.attention_window] * self.config.encoder_layers
+        # self.config.attention_mode = self.args.attention_mode
+        # self.config.attention_window = [self.args.attention_window] * self.config.encoder_layers
 
     def forward(self, input_ids, output_ids):
-        input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id, self.args.global_attention_indices)
+        input_ids, attention_mask = prepare_input(input_ids, self.tokenizer.pad_token_id)
         decoder_input_ids = shift_tokens_right(output_ids, self.config.pad_token_id) # (in: output_ids, eos_token_id, tgt_lang_id out: tgt_lang_id, output_ids, eos_token_id)
         labels = decoder_input_ids[:, 1:].clone()
         decoder_input_ids = decoder_input_ids[:, :-1] # without eos/last pad
@@ -233,7 +204,7 @@ class Simplifier(pl.LightningModule):
         outputs = self.forward(*batch)
         vloss = outputs[0]
         input_ids, output_ids = batch
-        input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id, self.args.global_attention_indices)
+        input_ids, attention_mask = prepare_input(input_ids, self.tokenizer.pad_token_id)
         if self.tags_included:
             # get list of target language tags
             # output_ids (batch_size, seq_len), with padding
@@ -378,10 +349,10 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--attention_dropout", type=float, default=0.1, help="attention dropout")
         parser.add_argument("--dropout", type=float, default=0.1, help="dropout")
         parser.add_argument("--activation_dropout", type=float, default=0.0, help="activation_dropout")
-        parser.add_argument("--attention_mode", type=str, default='sliding_chunks', help="Longformer attention mode")
-        parser.add_argument("--attention_window", type=int, default=512, help="Attention window")
+        # parser.add_argument("--attention_mode", type=str, default='sliding_chunks', help="Longformer attention mode")
+        # parser.add_argument("--attention_window", type=int, default=512, help="Attention window")
         parser.add_argument("--label_smoothing", type=float, default=0.0, required=False)
-        parser.add_argument("--global_attention_indices", type=int, nargs='+', default=[-1], required=False, help="List of indices of positions with global attention for longformer attention. Supports negative indices (-1 == last non-padding token). Default: [-1] == last source token (==lang_id) .")
+        # parser.add_argument("--global_attention_indices", type=int, nargs='+', default=[-1], required=False, help="List of indices of positions with global attention for longformer attention. Supports negative indices (-1 == last non-padding token). Default: [-1] == last source token (==lang_id) .")
         
         # Optimization params:
         #parser.add_argument("--warmup", type=int, default=1000, help="Number of warmup steps")

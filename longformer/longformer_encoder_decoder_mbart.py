@@ -37,6 +37,3 @@ class MLongformerEncoderDecoderConfig(MBartConfig):
         self.attention_mode = attention_mode
         self.gradient_checkpointing = gradient_checkpointing
         assert self.attention_mode in ['tvm', 'sliding_chunks', 'n2']
-
-
-

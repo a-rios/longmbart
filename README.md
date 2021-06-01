@@ -1,84 +1,100 @@
-# <p align=center>`MBart with Longformer windowed attention`</p>
+# <p align=center>`MBart for hospitality response generatin`</p>
 
-Pretrained mBART model from huggingface with `Longformer` windowed attention in encoder (decoder has standard attention).
+Pretrained mBART model from huggingface with a timmed
+embedding matrix to allow for efficient fine-tuning on a
+regular GPU.
+
+The scripts in this branch are adapted from
+https://github.com/a-rios/longformer-private, which extend
+the model further by replacing regular full self-attention
+in the encoder with Longformer windowed attention. This
+additional change to the underlying model is only
+required for very long input documents.
 
 ### Installation
 
 ```
-    bash
-    conda create --name longmbart python=3.8.5
-    conda activate longmbart
-    git clone https://github.com/ZurichNLP/longformer.git longmbart
-    cd longmbart
-    git checkout longmbart_hf4
-    conda install cudatoolkit=your-cuda-version
+    conda create --name hospo_respo_mbart python=3.8.8
+    conda activate hospo_respo_mbart
+    git clone https://github.com/ZurichNLP/longformer.git mbart
+    cd mbart
+    git checkout readvisor
+    conda install cudatoolkit=your-cuda-version # if GPU instance
     pip install .
     pip install -r requirements.txt
-  ```
-    
-   To convert the huggingface mBART model, use scripts/convert_mbart_to_longformerencoderdecoder.py, for example:
+```
+
+# Model setup
+
+To trim the embedding matrix of the huggingface mBART model, use `trim_mbart.py`, for example:
    
    ``` 
-   python $longformer_dir/scripts/convert_mbart_to_longformerencoderdecoder.py \
-   --save_model_to path-to-save-new-model \
-   --attention_window 512 \
-   --reduce-to-vocab list-of-spm-pieces \
-   --cache_dir path-to-huggingface-mbart \
-   --add_language_tags de_A1 de_A2 de_B1 \
-   --initialize_tags de_DE de_DE de_DE
-   ```
-    
+   python trim_mbart.py \
+    --base_model facebook/mbart-large-cc25 \
+    --save_model_to path-to-save-new-model \
+    --reduce-to-vocab list-of-spm-pieces \
+    --cache_dir path-to-huggingface-mbart \
+    --max_pos 1024 \
+    --add_special_tokens list-of-special-tokens
+  ```
+
    `--reduce-vocab-to-list` will resize the orginal pretrained model's vocabulary to the the pieces given in the list (text file, one piece per line). Pieces must be part of the pretrained sentencepiece model. 
-   `--add_language_tags` will add new language tags, use `--initialize_tags` to specify which embeddings they should be initialized with, e.g. for German language levels, start with the German embeddings.
-   
-   To fine-tune the converted model, use `longformer/simplification.py`. If training on multilingual data, preprocess your data to contain the language tags and </s> like this:
+   `--add_special_tokens` will add extend the model's vocabulary with new tokens (by default, these are added with `special_tokens=True`, which means they are not modified in any way, but they will be removed from the outputs when using `tokenizer.decode()`).
+
+# Model setup
+
+   To fine-tune the trimmed model, use `train.py`. If training on multilingual data, preprocess your data to contain the language tags and </s> like this:
    * source text: `src_lang source_sequene` (actual sequence in the model will be `source_sequence </s> src_lang`, reordering happens internally)
    * target text: `trg_lang target_sequence` 
    
- Example for fine-tuning (see `longformer/simplification.py` for all options):
+ Example for fine-tuning (see `train.py` for all options):
    
 ```
-python -m longformer.simplification \
---from_pretrained path-to-converted-model \
---tokenizer path-to-converted-model \
---save_dir path-to-save-fine-tuned-model \
---save_prefix "w512" \
---train_source path-to-source-train \
---train_target path-to-target-train \
---val_source path-to-source-dev \
---val_target path-to-target-dev \
---test_source path-to-source-test \
---test_target path-to-target-test \
---max_output_len max_target_length \
---max_input_len max_source_length \
---batch_size 1 \
---grad_accum 60 \
+
+pretrained=path-to-trimmed-model
+data=path-to-raw-data-dir
+SRC=source-suffix
+TGT=target-suffix
+
+mkdir $pretrained/ft/name-of-model/
+
+python train.py \
+--from_pretrained $pretrained \
+--tokenizer $pretrained \
+--save_dir $pretrained/ft \
+--save_prefix 2021-06-01_DR \
+--train_source $data/train.$SRC --train_target $data/train.$TGT \
+--val_source $data/valid.$SRC --val_target $data/valid.$TGT \
+--test_source $data/test.$SRC --test_target $data/test.$TGT \
+--tags_included \
+--max_input_len 512 --max_output_len 400 \
+--batch_size 8 \
+--grad_accum 5 \
 --num_workers 5 \
 --gpus 1 \
 --seed 222 \
 --attention_dropout 0.1 \
 --dropout 0.3 \
---attention_mode sliding_chunks \
---attention_window 512 \
 --label_smoothing 0.2 \
 --lr 0.00003 \
 --val_every 1.0 \
 --val_percent_check 1.0 \
 --test_percent_check 1.0 \
---early_stopping_metric 'rougeL' \
---patience 10 \
---lr_reduce_patience 8 \
---lr_reduce_factor 0.5 \
+--early_stopping_metric vloss \
+--patience 5 --max_epochs 20 \
+--lr_reduce_patience 8 --lr_reduce_factor 0.5 \
 --grad_ckpt \
---progress_bar_refresh_rate 10
+--progress_bar_refresh_rate 1 \
+--save_top_k 5
 ```
 
 Early stopping on one of these metrics: vloss, rouge1, rouge2, rougeL, rougeLsum, bleu (requires rouge_score and sacrebleu to be installed).
+
 In a setting where translating from A to B, set `--src_lang A` and `--tgt_lang B` (input has no language tags), in a multilingual setting where source and target text already have language tags, use `--tags_included`. 
 
-To translate with a fine-tuned model, use `longformer/simplify.py`, for example like this:
+To run inference with a fine-tuned model, use `inference.py`, for example like this:
 ```
-python -m longformer.simplify \
+python inference.py \
 --model_path path-to-fine-tuned-model \
 --checkpoint "checkpointepoch=name-of-checkpoint" \
 --tokenizer path-to-fine-tuned-model \
@@ -94,5 +110,14 @@ python -m longformer.simplify \
 --progress_bar_refresh_rate 1 \
 --tags_included
 ```
+
 Reference file is optional, if given, will print evaluation metrics (rouge1, rouge2, rougeL, rougeLsum, bleu). 
-If only one target language, use `--tgt_lang` to set, if multiple languages, either give a reference file with tags (`tgt_lang target_sequence`) with `--tags_included` or just a list of target tags with `--target_tags` (one tag per line for each sample in `--test_source`).
+If only one target language, use `--tgt_lang` to set, if
+multiple languages, either give a reference file with tags
+(`tgt_lang target_sequence`) with `--tags_included` or just
+a list of target tags with `--target_tags` (one tag per line
+for each sample in `--test_source`).
+
+Alternatively, use --infer_tags if the target language tag
+matches the source language tag and the source language tag
+is included in the input file.
