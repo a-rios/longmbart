@@ -6,20 +6,18 @@ from collections import defaultdict
 import sentencepiece.sentencepiece_model_pb2 as pb2
 import sentencepiece as spm
 
-from transformers import MBartTokenizer
-
-from transformers import MBartForConditionalGeneration
-from transformers.models.mbart.modeling_mbart import shift_tokens_right
-from longformer.longformer_encoder_decoder import LongformerSelfAttentionForBart
-from longformer.longformer_encoder_decoder_mbart import MLongformerEncoderDecoderForConditionalGeneration, MLongformerEncoderDecoderConfig
-from longformer.sliding_chunks import pad_to_window_size
+from transformers import MBartTokenizer, MBartForConditionalGeneration, MBartConfig
+# from transformers.models.mbart.modeling_mbart import shift_tokens_right
+# from longformer.longformer_encoder_decoder import LongformerSelfAttentionForBart
+# from longformer.longformer_encoder_decoder_mbart import MLongformerEncoderDecoderForConditionalGeneration, MLongformerEncoderDecoderConfig
+# from longformer.sliding_chunks import pad_to_window_size
 import torch
 
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-from transformers.models.mbart.modeling_mbart import MBartConfig, MBartForConditionalGeneration
+# from transformers.models.mbart.modeling_mbart import MBartConfig, MBartForConditionalGeneration
 
 # class TrimMBARTForConditionalGeneration(MBartForConditionalGeneration):
 #     def __init__(self, config):
@@ -55,7 +53,7 @@ def create_long_model(
     trims embedding matrix based on vocab in `reduce_to_vocab` (optional) 
     """
     model = MBartForConditionalGeneration.from_pretrained(pretrained_model_name_or_path=base_model, cache_dir=cache_dir)
-    tokenizer = MBartTokenizer.from_pretrained(tokenizer_name_or_path, model_max_length=max_pos, cache_dir=cache_dir)
+    tokenizer = MBartTokenizer.from_pretrained(tokenizer_name_or_path, model_max_length=1024, cache_dir=cache_dir)
     config = MBartConfig.from_pretrained(base_model, cache_dir=cache_dir)
     model.config = config
 
@@ -275,7 +273,7 @@ def main():
     parser.add_argument(
         '--max_pos',
         type=int,
-        default=4096 * 4,
+        default=1024,
         help='maximum encoder positions'
     )
     parser.add_argument(
@@ -391,7 +389,7 @@ def main():
             tokenizer = MBartTokenizer.from_pretrained(args.save_model_to)
         if not 'model' in locals():
             # model = TrimMBARTForConditionalGeneration.from_pretrained(args.save_model_to)
-            model = MBARTForConditionalGeneration.from_pretrained(args.save_model_to)
+            model = MBartForConditionalGeneration.from_pretrained(args.save_model_to)
     
         if args.add_language_tags:
     

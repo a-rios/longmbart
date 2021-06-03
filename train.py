@@ -104,7 +104,9 @@ class SimplificationDataset(Dataset):
             sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], tgt_texts=[target], tags_included=True, max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt")
         else:
             sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], src_lang=self.src_lang, tgt_texts=[target], tgt_lang=self.tgt_lang , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt") # TODO move this to _get_dataloader, preprocess everything at once?
-
+        # breakpoint()
+        # TODO: QUESTION FOR ARIOS: rearranges target
+        # language tag twice: here and line 168.
         input_ids = sample['input_ids'].squeeze()
         output_ids = sample['labels'].squeeze()
         if self.tags_included: # move language tag to the end of the sequence in source, also in target (so we can use mbarts shift_tokens_right that takes padding into account)
@@ -161,6 +163,7 @@ class Simplifier(pl.LightningModule):
         # self.config.attention_window = [self.args.attention_window] * self.config.encoder_layers
 
     def forward(self, input_ids, output_ids):
+        # breakpoint()
         input_ids, attention_mask = prepare_input(input_ids, self.tokenizer.pad_token_id)
         decoder_input_ids = shift_tokens_right(output_ids, self.config.pad_token_id) # (in: output_ids, eos_token_id, tgt_lang_id out: tgt_lang_id, output_ids, eos_token_id)
         labels = decoder_input_ids[:, 1:].clone()
