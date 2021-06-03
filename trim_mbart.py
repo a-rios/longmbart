@@ -25,6 +25,7 @@ def trim_embedding_matrix_of_pretrained_model(
     """
     trims embedding matrix based on vocab in `reduce_to_vocab` (optional) 
     """
+    logger.info("loading pretrained models and config...")
     model = MBartForConditionalGeneration.from_pretrained(pretrained_model_name_or_path=base_model, cache_dir=cache_dir)
     # breakpoint()
     # config = MBartConfig.from_pretrained(base_model, cache_dir=cache_dir)
@@ -86,7 +87,7 @@ def trim_embedding_matrix_of_pretrained_model(
                 final_logits_bias_new[i] = piece_final_logits_bias
 
             new_embed_iter = 4
-            for embed_iter, spm_iter in tqdm(zip(range(4,base_vocab_length_original), range(3,base_vocab_length_original-1))): # full vocab size with (!) the added tokens, 250027 | 
+            for embed_iter, spm_iter in zip(range(4,base_vocab_length_original), range(3,base_vocab_length_original-1)): # full vocab size with (!) the added tokens, 250027 | 
 
                 if new_embed_iter > base_vocab_length_new:
                     print("ran out of space at position {} in new matrix with vocab size {}".format(j, base_vocab_length_new))
@@ -123,7 +124,7 @@ def trim_embedding_matrix_of_pretrained_model(
                 removed +=1
 
             ## fill in additional vocab positions (language ids etc)
-            for i in tqdm(range(1,added_vocab_length)):
+            for i in range(1,added_vocab_length):
                 new_embed_weight[base_vocab_length_new+i] = original_embed_weight[base_vocab_length_original+i]
                 #print("position in new tensor ", base_vocab_length_new+i)
                 #print("position in old tensor ", base_vocab_length_original+i)
@@ -267,7 +268,7 @@ def main():
             translation = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
             if not len(translation.strip()):
                 print('[!] Looks like something went wrong - translation is empty.')
-            breakpoint()
+            # breakpoint()
             print(translation)
 
             batch: dict = tokenizer.prepare_seq2seq_batch(src_texts=[TXT3, TXT4], max_length=512, truncation=False, padding="max_length", return_tensors="pt", tags_included=True)
@@ -277,9 +278,9 @@ def main():
             print("decoder start ids ", decoder_start_token_ids)
             translated_tokens = model.generate(**batch, decoder_start_token_ids=decoder_start_token_ids, use_cache=True, num_beams=2)
             translation = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
-            print(translation)
             if not len(translation.strip()):
                 print('[!] Looks like something went wrong - translation is empty.')
+            print(translation)
 
 
 if __name__ == "__main__":
