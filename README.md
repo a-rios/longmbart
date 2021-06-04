@@ -1,6 +1,6 @@
-# <p align=center>`MBart for hospitality response generatin`</p>
+# MBart for hospitality review response generation
 
-Pretrained mBART model from huggingface with a timmed
+Pretrained mBART model from huggingface with a trimmed
 embedding matrix to allow for efficient fine-tuning on a
 regular GPU.
 
@@ -14,7 +14,7 @@ required for very long input documents.
 ### Installation
 
 ```
-    conda create --name hospo_respo_mbart python=3.8.8
+    conda create --name hospo_respo_mbart python=3.8.5
     conda activate hospo_respo_mbart
     git clone https://github.com/ZurichNLP/longformer.git mbart
     cd mbart
@@ -24,7 +24,21 @@ required for very long input documents.
     pip install -r requirements.txt
 ```
 
-# Model setup
+### Bash script wrappers
+
+The bash scripts 
+
+- `run_mbart_conversion.sh`
+- `run_finetuning.sh`
+- `run_inference.sh`
+
+provide simple wrappers to tie the distinct
+steps together. To use these, simply adjust the absolute
+directory paths at the top of each script and run using the
+example call provided in each script.
+
+
+### Model setup
 
 To trim the embedding matrix of the huggingface mBART model, use `trim_mbart.py`, for example:
    
@@ -34,14 +48,14 @@ To trim the embedding matrix of the huggingface mBART model, use `trim_mbart.py`
     --save_model_to path-to-save-new-model \
     --reduce-to-vocab list-of-spm-pieces \
     --cache_dir path-to-huggingface-mbart \
-    --max_pos 1024 \
     --add_special_tokens list-of-special-tokens
   ```
 
    `--reduce-vocab-to-list` will resize the orginal pretrained model's vocabulary to the the pieces given in the list (text file, one piece per line). Pieces must be part of the pretrained sentencepiece model. 
-   `--add_special_tokens` will add extend the model's vocabulary with new tokens (by default, these are added with `special_tokens=True`, which means they are not modified in any way, but they will be removed from the outputs when using `tokenizer.decode()`).
+   `--add_special_tokens` will add extend the model's
+   vocabulary with new tokens (by default, these are added with `special_tokens=False`).
 
-# Model setup
+### Fine-tuning
 
    To fine-tune the trimmed model, use `train.py`. If training on multilingual data, preprocess your data to contain the language tags and </s> like this:
    * source text: `src_lang source_sequene` (actual sequence in the model will be `source_sequence </s> src_lang`, reordering happens internally)
@@ -62,7 +76,7 @@ python train.py \
 --from_pretrained $pretrained \
 --tokenizer $pretrained \
 --save_dir $pretrained/ft \
---save_prefix 2021-06-01_DR \
+--save_prefix name-of-model \
 --train_source $data/train.$SRC --train_target $data/train.$TGT \
 --val_source $data/valid.$SRC --val_target $data/valid.$TGT \
 --test_source $data/test.$SRC --test_target $data/test.$TGT \
@@ -91,6 +105,8 @@ python train.py \
 Early stopping on one of these metrics: vloss, rouge1, rouge2, rougeL, rougeLsum, bleu (requires rouge_score and sacrebleu to be installed).
 
 In a setting where translating from A to B, set `--src_lang A` and `--tgt_lang B` (input has no language tags), in a multilingual setting where source and target text already have language tags, use `--tags_included`. 
+
+### Inference
 
 To run inference with a fine-tuned model, use `inference.py`, for example like this:
 ```
@@ -121,3 +137,9 @@ for each sample in `--test_source`).
 Alternatively, use --infer_tags if the target language tag
 matches the source language tag and the source language tag
 is included in the input file.
+
+# Acknowledgements
+
+This implemenation is based on the scripts from AllenAI's
+Longformer implementation and Annette Rios (UZH CL) who
+adapted mBART with Longformer attention.
