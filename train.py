@@ -1,4 +1,21 @@
-## TODO: remove redundancies from LongmBART
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+
+This code is adapted from AllenAI's Longformer
+summarization task:
+    https://github.com/allenai/longformer/blob/master/scripts/summarization.py
+
+Note: 
+    Annette Rios (arios@cl.uzh.ch) initially adapted it for long-document simplication.
+    Tannon Kew (kew@cl.uzh.ch) made minor changes for its
+    application in the ReAdvisor project for response
+    generation.
+    
+Date: 04/06/2021
+
+"""
 
 import os
 import argparse
@@ -104,9 +121,7 @@ class SimplificationDataset(Dataset):
             sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], tgt_texts=[target], tags_included=True, max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt")
         else:
             sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], src_lang=self.src_lang, tgt_texts=[target], tgt_lang=self.tgt_lang , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt") # TODO move this to _get_dataloader, preprocess everything at once?
-        # breakpoint()
-        # TODO: QUESTION FOR ARIOS: rearranges target
-        # language tag twice: here and line 168.
+
         input_ids = sample['input_ids'].squeeze()
         output_ids = sample['labels'].squeeze()
         if self.tags_included: # move language tag to the end of the sequence in source, also in target (so we can use mbarts shift_tokens_right that takes padding into account)

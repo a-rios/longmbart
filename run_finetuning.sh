@@ -12,7 +12,7 @@ set -e
 
 GPU=$1
 scratch=/srv/scratch6/kew/mbart/hospo_respo/respo_final/
-pretrained=$scratch/mbart_model_2021-06-03/
+pretrained=$scratch/mbart_model_2021-06-04/
 data=$scratch/data/
 outdir=$pretrained/ft/
 
@@ -43,7 +43,7 @@ python train.py \
 --from_pretrained $pretrained \
 --tokenizer $pretrained \
 --save_dir $outdir \
---save_prefix 2021-06-03_DER \
+--save_prefix $save_pref \
 --train_source $data/train.$SRC --train_target $data/train.$TGT \
 --val_source $data/valid.$SRC --val_target $data/valid.$TGT \
 --test_source $data/test.$SRC --test_target $data/test.$TGT \

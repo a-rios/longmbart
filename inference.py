@@ -1,5 +1,21 @@
-## TODO: remove redundancies from LongmBART
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
+"""
+
+This code is adapted from AllenAI's Longformer
+TriviaQA task:
+    https://github.com/allenai/longformer/blob/master/scripts/
+
+Note: 
+    Annette Rios (arios@cl.uzh.ch) initially adapted it for long-document simplication.
+    Tannon Kew (kew@cl.uzh.ch) made minor changes for its
+    application in the ReAdvisor project for response
+    generation.
+    
+Date: 04/06/2021
+
+"""
 
 import os
 import argparse
