@@ -34,8 +34,6 @@ def trim_embedding_matrix_of_pretrained_model(
     config = MBartConfig.from_pretrained(base_model, cache_dir=cache_dir)
     model.config = config
 
-    # breakpoint()
-
     if print_params:
         for name, param in model.named_parameters():
             if param.requires_grad:
@@ -65,9 +63,11 @@ def trim_embedding_matrix_of_pretrained_model(
             new_embed_weight = model.model.shared.weight.new_empty(new_vocab_size, model_size)
             ## need to reduce final_logits_bias too
             final_logits_bias_original = model.final_logits_bias.transpose(0,1) # (1, vocab_size)
-            final_logits_bias_new = final_logits_bias_original.new_empty(new_vocab_size,1)
+            final_logits_bias_new = final_logits_bias_original.new_empty(new_vocab_size,1) # TODO: this seems to be just all zeros?
 
             ## keep order same as in original vocab.. iterate over 250k entries
+            # `added_vocab_length` = length of special
+            # mabrt's specual tokens used (27)
             added_vocab_length = len(tokenizer.lang_code_to_id) + tokenizer.fairseq_offset + 1
             base_vocab_length_original = original_vocab_size - added_vocab_length
             base_vocab_length_new = len(keep_pieces) + num_special_tokens
@@ -115,22 +115,29 @@ def trim_embedding_matrix_of_pretrained_model(
             print("len vocabs to keep {} + special tokens {}".format(len(keep_pieces.keys()), num_special_tokens))
             print("new vocab size ", new_vocab_size)
 
+            # breakpoint()
             # check ids in reduced spm model
             removed =0
             for i in tqdm(indices_to_remove):
                 position = i-removed
-                #print("deleting ", pb2_model.pieces[position].piece)
+                # print("deleting ", pb2_model.pieces[position].piece)
                 del pb2_model.pieces[position]
                 removed +=1
 
             ## fill in additional vocab positions (language ids etc)
-            for i in range(1,added_vocab_length):
+            # breakpoint()
+            for i in range(added_vocab_length):
+            # for i in range(1,added_vocab_length): # BUG: skipping final_logits_bias_new[-27]
                 new_embed_weight[base_vocab_length_new+i] = original_embed_weight[base_vocab_length_original+i]
+                
+                final_logits_bias_new[base_vocab_length_new+i] = final_logits_bias_original[base_vocab_length_original+i]
                 #print("position in new tensor ", base_vocab_length_new+i)
                 #print("position in old tensor ", base_vocab_length_original+i)
                 #print("embed ", new_embed_weight[base_vocab_length_new+i])
 
-            # breakpoint()
+            assert len(torch.nonzero(final_logits_bias_new, as_tuple=False)) == 0, "final logits bias must be all zeros for fine-tuning but found non zero values. Hint: check update to new_embed_weights and final_logits_bias_new."
+
+            
 
             model.model.shared.weight.data = new_embed_weight
             model.final_logits_bias.data = final_logits_bias_new.transpose(0,1) # swap dimensions back to (1, vocab_size
@@ -140,6 +147,7 @@ def trim_embedding_matrix_of_pretrained_model(
 
             tokenizer.init_kwargs['vocab_file'] = os.path.join(save_model_to, "reduced.spm.model")
             tokenizer.vocab_file = os.path.join(save_model_to, "reduced.spm.model")
+            logger.info(f"saving reduced tokenizer vocabulary with size {new_vocab_size}")
             tokenizer.save_vocabulary(save_model_to)
             config.vocab_size = new_vocab_size
     
@@ -223,16 +231,20 @@ def main():
     print("loaded tokenizer with len ", len(tokenizer.sp_model))
     print(model.config)
 
+    breakpoint()
+
     if user_special_tokens:
         # https://huggingface.co/transformers/internal/tokenization_utils.html?highlight=add_tokens
-        num_added_toks = tokenizer.add_tokens(user_special_tokens, special_tokens=True)
+        num_added_toks = tokenizer.add_tokens(user_special_tokens, special_tokens=False)
         print('added', num_added_toks, 'special tokens to tokenizer')
         model.resize_token_embeddings(len(tokenizer))
 
-    print("saving tokenizer with new tags")
-    tokenizer.save_pretrained(args.save_model_to)
-    print("saving model with new tags")
-    model.save_pretrained(args.save_model_to)
+        print("saving tokenizer with new tags")
+        tokenizer.save_pretrained(args.save_model_to)
+        print("saving model with new tags")
+        model.save_pretrained(args.save_model_to)
+
+    # breakpoint()
 
     print(tokenizer.special_tokens_map)
     print(tokenizer.id_to_lang_code)
