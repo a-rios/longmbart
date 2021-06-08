@@ -109,7 +109,10 @@ class InferenceSimplifier(pl.LightningModule):
 
         if self.args.bad_words is not None:
             bad_words = [line.strip() for line in open(self.args.bad_words, 'r').readlines() if len(line.strip()) > 0]
-#            bad_words = ['Test', ' Test']
+            input_vocab = set([word for line in open(self.args.test_source, 'r') for word in line.strip().split()])
+            bad_words = [bad_word for bad_word in bad_words if bad_word in input_vocab]
+            if args.used_bad_words is not None: 
+                with open(self.args.used_bad_words, 'w') as bw_out: bw_out.write('\n'.join(bad_words))
             bad_words_bpe = [self.tokenizer.tokenize(bad_word) for bad_word in bad_words]
             bad_words_ids = [self.tokenizer.convert_tokens_to_ids(word) for word in bad_words_bpe]
             for i in range (len(bad_words_ids)):
@@ -281,6 +284,7 @@ class InferenceSimplifier(pl.LightningModule):
         parser.add_argument("--max_input_len", type=int, default=256, help="maximum num of wordpieces, if unspecified, will use number of encoder positions from model config.")
         parser.add_argument("--max_output_len", type=int, default=512, help="maximum num of wordpieces, if unspecified, will use number of decoder positions from model config.")
         parser.add_argument("--bad_words", type=str, default=None, help="Path to file containing bad words.")
+        parser.add_argument("--used_bad_words", type=str, default=None, help="Path to file where used bad words should be saved.")
         # TODO
         # parser.add_argument("--do_predict", action="store_true", default=False, help="If given, predictions are run using the `predict_step()` method rather than `test_step()`. Outputs are written to the specified output file without being evaluated!")
         
