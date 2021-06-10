@@ -104,14 +104,14 @@ class InferenceSimplifier(pl.LightningModule):
         for p in self.model.parameters():
             p.requires_grad = False
 
-        input_ids, ref, tags = batch
+        input_ids, ref, tags  = batch
         input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id, self.args.global_attention_indices)
 
         if self.args.bad_words is not None:
             bad_words = [line.strip() for line in open(self.args.bad_words, 'r').readlines() if len(line.strip()) > 0]
             input_vocab = set([word for line in open(self.args.test_source, 'r') for word in line.strip().split()])
             bad_words = [bad_word for bad_word in bad_words if bad_word in input_vocab]
-            if args.used_bad_words is not None: 
+            if args.used_bad_words is not None:
                 with open(self.args.used_bad_words, 'w') as bw_out: bw_out.write('\n'.join(bad_words))
             bad_words_bpe = [self.tokenizer.tokenize(bad_word) for bad_word in bad_words]
             bad_words_ids = [self.tokenizer.convert_tokens_to_ids(word) for word in bad_words_bpe]

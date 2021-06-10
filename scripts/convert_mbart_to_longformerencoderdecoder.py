@@ -148,7 +148,7 @@ def create_long_model(
                 removed +=1
 
             ## fill in additional vocab positions (language ids etc)
-            for i in range(1,added_vocab_length):
+            for i in range(added_vocab_length):
                 new_embed_weight[base_vocab_length_new+i] = original_embed_weight[base_vocab_length_original+i]
                 final_logits_bias_new[base_vocab_length_new+i] = final_logits_bias_original[base_vocab_length_original+i]
                 #print("position in new tensor ", base_vocab_length_new+i)
@@ -309,8 +309,8 @@ def main():
             init_bias = final_logits_bias[init_tag_id].unsqueeze(dim=0)
             final_logits_bias = torch.cat((final_logits_bias, init_bias), dim=0)
             print("added ", new_tag)
-            print(init_embed.shape)
-            print(embed_weight.shape)
+            print("tag embedding shape ", init_embed.shape)
+            print("embedding matrix shape ", embed_weight.shape)
 
         model.final_logits_bias.data = final_logits_bias.transpose(0,1)
         model.model.shared.weight.data = embed_weight
