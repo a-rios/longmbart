@@ -106,6 +106,20 @@ class InferenceSimplifier(pl.LightningModule):
 
         input_ids, ref, tags  = batch
         input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id, self.args.global_attention_indices)
+
+        if self.args.bad_words is not None:
+            bad_words = [line.strip() for line in open(self.args.bad_words, 'r').readlines() if len(line.strip()) > 0]
+            input_vocab = set([word for line in open(self.args.test_source, 'r') for word in line.strip().split()])
+            bad_words = [bad_word for bad_word in bad_words if bad_word in input_vocab]
+            if args.used_bad_words is not None:
+                with open(self.args.used_bad_words, 'w') as bw_out: bw_out.write('\n'.join(bad_words))
+            bad_words_bpe = [self.tokenizer.tokenize(bad_word) for bad_word in bad_words]
+            bad_words_ids = [self.tokenizer.convert_tokens_to_ids(word) for word in bad_words_bpe]
+            for i in range (len(bad_words_ids)):
+                if len(bad_words_ids[i]) < 1: print(i, bad_words[i])
+        else:
+            bad_words_ids = None
+
         if self.tags_included:
             assert (ref[0] is not None or tags[0] is not None), "Need either reference with target labels or list of target labels with --tags-included (multilingual batches)"
             if  ref[0] is not None:
@@ -126,7 +140,8 @@ class InferenceSimplifier(pl.LightningModule):
                                             length_penalty=self.args.length_penalty,
                                             num_return_sequences=self.args.num_return_sequences,
                                             output_scores=True if self.args.output_to_json else self.args.output_scores,
-                                            return_dict_in_generate=True if self.args.output_to_json else self.args.return_dict_in_generate)
+                                            return_dict_in_generate=True if self.args.output_to_json else self.args.return_dict_in_generate,
+                                            bad_words_ids=bad_words_ids)
         else:
             generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
                                             use_cache=True, max_length=self.max_input_len,
@@ -139,7 +154,8 @@ class InferenceSimplifier(pl.LightningModule):
                                             length_penalty=self.args.length_penalty,
                                             num_return_sequences=self.args.num_return_sequences,
                                             output_scores=True if self.args.output_to_json else self.args.output_scores,
-                                            return_dict_in_generate=True if self.args.output_to_json else self.args.return_dict_in_generate)
+                                            return_dict_in_generate=True if self.args.output_to_json else self.args.return_dict_in_generate,
+                                            bad_words_ids=bad_words_ids)
 
         if not self.args.output_to_json:
 
@@ -267,6 +283,8 @@ class InferenceSimplifier(pl.LightningModule):
         parser.add_argument("--infer_target_tags", action="store_true", default=False, help="If test_target is not given and target language tags can be inferred from the source language tags provided with --tags_included (e.g. de_DE -> de_DE). This save having a dedicated text file in which the tags are explicitly specified.")
         parser.add_argument("--max_input_len", type=int, default=256, help="maximum num of wordpieces, if unspecified, will use number of encoder positions from model config.")
         parser.add_argument("--max_output_len", type=int, default=512, help="maximum num of wordpieces, if unspecified, will use number of decoder positions from model config.")
+        parser.add_argument("--bad_words", type=str, default=None, help="Path to file containing bad words.")
+        parser.add_argument("--used_bad_words", type=str, default=None, help="Path to file where used bad words should be saved.")
         # TODO
         # parser.add_argument("--do_predict", action="store_true", default=False, help="If given, predictions are run using the `predict_step()` method rather than `test_step()`. Outputs are written to the specified output file without being evaluated!")
         
