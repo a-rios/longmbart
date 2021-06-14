@@ -13,13 +13,14 @@ set -e
 GPU=$1
 scratch=/srv/scratch6/kew/mbart/hospo_respo/respo_final/
 
-data=$scratch/data/ # regular test set (2020)
-finetuned=$scratch/mbart_model_2021-06-03/ft/2021-06-01_DR/
-model_checkpoint=$finetuned/'checkpointepoch=19_vloss=3.56469.ckpt'
+data=$scratch/data/ # regular test set
+finetuned=$scratch/mbart_model_2021-06-04/ft/2021-06-04_15-27-39
+model_checkpoint=$finetuned/'checkpointepoch=00_vloss=4.26919.ckpt'
 outdir=$finetuned/inference/
 outfile=$outdir/translations.json
 
-SRC="review_tagged_DER"
+SRC="review_tagged"
+TGT="response_tagged"
 
 if [[ -z $GPU ]]; then
   echo "No GPU specified!" && exit 1
@@ -36,15 +37,14 @@ python inference.py \
     --checkpoint $model_checkpoint \
     --tokenizer $finetuned \
     --test_source $data/test.$SRC \
-    --infer_target_tags \
+    --test_target $data/test.$TGT \
     --tags_included \
-    --max_output_len 512 \
     --max_input_len 512 \
+    --max_output_len 400 \
     --batch_size 4 \
     --num_workers 5 \
     --gpus 1 \
-    --beam_size 6 \
-    --do_sample --top_k 5 \
+    --beam_size 5 \
     --progress_bar_refresh_rate 1 \
-    --num_return_sequences 6 \
+    --num_return_sequences 1 \
     --translation $outfile --output_to_json;
