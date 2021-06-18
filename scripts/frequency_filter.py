@@ -47,7 +47,7 @@ def main(filter_data_dir, vocab_dir, filename, n_list):
     freq_list = get_freq_list(filter_data_dir)
     with open(os.path.join(vocab_dir, filename), 'r') as infile:
         complete = infile.readlines()
-    unfiltered = filter_foreign_characters(complete)
+    unfiltered = filter_foreign_characters(complete, return_set=True)
     for n in n_list:
         filtered = filter_by_frequency(unfiltered, freq_list, n)
         outfilename = os.path.join(vocab_dir, '{}.{}k'.format(filename, int(n/1000)))
