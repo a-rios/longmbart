@@ -5,7 +5,7 @@
 import sys
 import os            
             
-from filter import filter_foreign_characters
+from filter_foreign import filter_foreign_characters
 
 
 def get_freq_list(filter_data_dir):
