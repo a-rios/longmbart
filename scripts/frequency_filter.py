@@ -33,14 +33,24 @@ def parse_args() -> argparse.Namespace:
         "--output-prefix",
         type=str,
         help="File prefix for output files",
-        metavar="PATH",
+        metavar="STRING",
     )
     parser.add_argument(
-        "--vocab-size",
+        "--vocab-sizes",
         type=int,
         nargs="+",
-        help="Vocabulary size of the output",
-        metavar="PATH",
+        help="Vocabulary sizes of the output",
+        metavar="INT",
+    )
+    parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="Create a raw vocabulary from the filter files",
+    )
+    parser.add_argument(
+        "--filtered",
+        action="store_true",
+        help="Create a unicode-filtered vocabulary from the filter files",
     )
     args = parser.parse_args()
     return args
@@ -79,16 +89,36 @@ def filter_by_frequency(unfiltered, freq_list, n):
     return sorted(filtered)
 
 
+def create_raw_vocab(freq_list, output_dir, output_prefix):
+    outfilename = output_dir / '{}.raw'.format(output_prefix)
+    with open(outfilename, 'w') as outfile:
+        for piece in freq_list:
+            outfile.write(piece + "\n")
+
+
+def create_filtered_vocab(freq_list, output_dir, output_prefix):
+    filtered = filter_foreign_characters(freq_list)
+    outfilename = output_dir / '{}.filtered'.format(output_prefix)
+    with open(outfilename, 'w') as outfile:
+        for piece in filtered:
+            outfile.write(piece + "\n")
+
+
 def main(args: argparse.Namespace):
     freq_list = get_freq_list(args.filter_files)
-    complete = args.complete_vocab.readlines()
-    unfiltered = filter_foreign_characters(complete, return_set=True)
-    for n in args.vocab_size:
-        filtered = filter_by_frequency(unfiltered, freq_list, n)
-        outfilename = args.output_dir / '{}.{}k'.format(args.output_prefix, int(n/1000))
-        with open(outfilename, 'w') as outfile:
-            for token in filtered:
-                outfile.write(token + '\n')
+    if args.raw and args.output_dir and args.output_prefix:
+        create_raw_vocab(freq_list, args.output_dir, args.output_prefix)
+    if args.filtered and args.output_dir and args.output_prefix:
+        create_filtered_vocab(freq_list, args.output_dir, args.output_prefix)
+    if (args.vocab_sizes and args.complete_vocab and args.output_dir and args.output_prefix):
+        complete = args.complete_vocab.readlines()
+        unfiltered = filter_foreign_characters(complete, return_set=True)
+        for n in args.vocab_sizes:
+            filtered = filter_by_frequency(unfiltered, freq_list, n)
+            outfilename = args.output_dir / '{}.{}k'.format(args.output_prefix, int(n/1000))
+            with open(outfilename, 'w') as outfile:
+                for token in filtered:
+                    outfile.write(token + '\n')
 
 
 if __name__ == '__main__':
