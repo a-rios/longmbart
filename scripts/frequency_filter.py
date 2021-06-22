@@ -110,7 +110,7 @@ def main(args: argparse.Namespace):
         create_raw_vocab(freq_list, args.output_dir, args.output_prefix)
     if args.filtered and args.output_dir and args.output_prefix:
         create_filtered_vocab(freq_list, args.output_dir, args.output_prefix)
-    if (args.vocab_sizes and args.complete_vocab and args.output_dir and args.output_prefix):
+    if args.vocab_sizes and args.complete_vocab and args.output_dir and args.output_prefix:
         complete = args.complete_vocab.readlines()
         unfiltered = filter_foreign_characters(complete, return_set=True)
         for n in args.vocab_sizes:
