@@ -2,23 +2,68 @@
 # -*- coding: utf-8 -*-
 
 
-import sys
-import os            
-            
-from filter import filter_foreign_characters
+import argparse
+from pathlib import Path
+
+from filter_foreign import filter_foreign_characters
 
 
-def get_freq_list(filter_data_dir):
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--filter-files",
+        type=argparse.FileType("r"),
+        nargs="+",
+        help="Files from which to create a frequency list",
+        metavar="PATH",
+    )
+    parser.add_argument(
+        "--complete-vocab",
+        type=argparse.FileType("r"),
+        help="File containing the complete vocabulary to filter",
+        metavar="PATH",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Output directory for filtered vocabularies",
+        metavar="PATH",
+    )
+    parser.add_argument(
+        "--output-prefix",
+        type=str,
+        help="File prefix for output files",
+        metavar="STRING",
+    )
+    parser.add_argument(
+        "--vocab-sizes",
+        type=int,
+        nargs="+",
+        help="Vocabulary sizes of the output",
+        metavar="INT",
+    )
+    parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="Create a raw vocabulary from the filter files",
+    )
+    parser.add_argument(
+        "--filtered",
+        action="store_true",
+        help="Create a unicode-filtered vocabulary from the filter files",
+    )
+    args = parser.parse_args()
+    return args
+
+
+def get_freq_list(frequency_files):
     def by_value(item):
         return item[1]
-        
+
     freq_dict = dict()
     freq_list = list()
-    # frequency_files = os.listdir(filter_data_dir)
-    frequency_files = ['APA_capito_webcorpus.spm']
     for file in frequency_files:
-        with open(os.path.join(filter_data_dir, file), 'r') as infile:
-            lines = infile.readlines()
+        lines = file.readlines()
         for line in lines:
             tokens = line.split()
             for token in tokens:
@@ -26,39 +71,56 @@ def get_freq_list(filter_data_dir):
                     freq_dict[token] += 1
                 else:
                     freq_dict[token] = 1
-    
+
     for k, v in sorted(freq_dict.items(), key=by_value, reverse=True):
         freq_list.append(k)
     return freq_list
-    
-    
+
+
 def filter_by_frequency(unfiltered, freq_list, n):
     filtered = list()
-    
+
     for c in freq_list:
-        if len(filtered) >= n: break
+        if len(filtered) >= n:
+            break
         if c in unfiltered:
             filtered.append(c)
-    
-    return sorted(filtered)
-    
-    
-def main(filter_data_dir, vocab_dir, filename, n_list):
-    freq_list = get_freq_list(filter_data_dir)
-    with open(os.path.join(vocab_dir, filename), 'r') as infile:
-        complete = infile.readlines()
-    unfiltered = filter_foreign_characters(complete)
-    for n in n_list:
-        filtered = filter_by_frequency(unfiltered, freq_list, n)
-        outfilename = os.path.join(vocab_dir, '{}.{}k'.format(filename, int(n/1000)))
-        with open(outfilename, 'w') as outfile:
-            for token in filtered:
-                outfile.write(token + '\n')
 
-                
+    return sorted(filtered)
+
+
+def create_raw_vocab(freq_list, output_dir, output_prefix):
+    outfilename = output_dir / '{}.raw'.format(output_prefix)
+    with open(outfilename, 'w') as outfile:
+        for piece in freq_list:
+            outfile.write(piece + "\n")
+
+
+def create_filtered_vocab(freq_list, output_dir, output_prefix):
+    filtered = filter_foreign_characters(freq_list)
+    outfilename = output_dir / '{}.filtered'.format(output_prefix)
+    with open(outfilename, 'w') as outfile:
+        for piece in filtered:
+            outfile.write(piece + "\n")
+
+
+def main(args: argparse.Namespace):
+    freq_list = get_freq_list(args.filter_files)
+    if args.raw and args.output_dir and args.output_prefix:
+        create_raw_vocab(freq_list, args.output_dir, args.output_prefix)
+    if args.filtered and args.output_dir and args.output_prefix:
+        create_filtered_vocab(freq_list, args.output_dir, args.output_prefix)
+    if args.vocab_sizes and args.complete_vocab and args.output_dir and args.output_prefix:
+        complete = args.complete_vocab.readlines()
+        unfiltered = filter_foreign_characters(complete, return_set=True)
+        for n in args.vocab_sizes:
+            filtered = filter_by_frequency(unfiltered, freq_list, n)
+            outfilename = args.output_dir / '{}.{}k'.format(args.output_prefix, int(n/1000))
+            with open(outfilename, 'w') as outfile:
+                for token in filtered:
+                    outfile.write(token + '\n')
+
+
 if __name__ == '__main__':
-    filter_data_dir = '../data/frequency_data'
-    vocab_dir = '../data/vocabulary'
-    filename = 'all.spm.uniq'
-    n_list = [20000, 23000, 25000, 27000, 30000, 35000]
-    main(filter_data_dir, vocab_dir, filename, n_list)
+    args = parse_args()
+    main(args)

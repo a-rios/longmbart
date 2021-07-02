@@ -92,7 +92,7 @@ class UnwantedSeq(Exception):
     pass
 
 
-def filter_foreign_characters(unfiltered):
+def filter_foreign_characters(unfiltered, return_set=False):
     filtered = list()
 
     for line in unfiltered:
@@ -113,7 +113,8 @@ def filter_foreign_characters(unfiltered):
             continue
             
     filtered = set(filtered)
-    filtered = sorted(filtered)
+    if not return_set:
+        filtered = sorted(filtered)
     return filtered
 
                                                                   

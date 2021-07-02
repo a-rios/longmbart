@@ -159,7 +159,7 @@ class InferenceSimplifier(pl.LightningModule):
 
         if not self.args.output_to_json:
 
-            generated_strs = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=True)
+            generated_strs = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=not self.args.keep_special_tokens)
             with open(self.args.translation, 'a') as f:
                 for sample in generated_strs:
                     f.write(sample + "\n")
@@ -173,9 +173,9 @@ class InferenceSimplifier(pl.LightningModule):
             # if running inference with self.args.batch_size
             # > 1, we need to make sure we pair the correct input sequence
             # with the correct returned hypotheses.
-            batch_hyp_strs = self.tokenizer.batch_decode(generated_ids.sequences.tolist(), skip_special_tokens=True)
+            batch_hyp_strs = self.tokenizer.batch_decode(generated_ids.sequences.tolist(), skip_special_tokens=not self.args.keep_special_tokens)
             batch_hyp_scores = generated_ids.sequences_scores.tolist()
-            batch_source_strs = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=True)
+            batch_source_strs = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=not self.args.keep_special_tokens)
 
             generated_strs = []
 
@@ -297,6 +297,7 @@ class InferenceSimplifier(pl.LightningModule):
         parser.add_argument("--beam_size", type=int, default=4, help="Beam size for inference when testing/validating. Default: 4.")
         parser.add_argument("--test_percent_check", default=1.00, type=float, help='Percent of test data used')
         parser.add_argument("--global_attention_indices", type=int, nargs='+', default=[-1], required=False, help="List of indices of positions with global attention for longformer attention. Supports negative indices (-1 == last non-padding token). Default: [-1] == last source token (==lang_id) .")
+        parser.add_argument("--keep_special_tokens", default=False, action="store_true", help="If true, do not skip special tokens.")
 
         parser.add_argument("--output_to_json", default=False, action="store_true", help='If true, decoding output is a verbose JSONL containing, src, tgt, and scored model output hyps')
         
