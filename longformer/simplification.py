@@ -110,9 +110,11 @@ def get_eval_scores(ref, generated_strs, tags_included=False, vloss=None):
                 'bleu' : vloss.new_zeros(1) + bleu.score,
                 'decoded' : generated_strs}
 
+def flatten(lst):
+    return [item for sublist in lst for item in sublist]
 
 class SimplificationDataset(Dataset):
-    def __init__(self, inputs, labels, name, tokenizer, max_input_len, max_output_len, src_lang, tgt_lang, tags_included):
+    def __init__(self, inputs, labels, name, tokenizer, max_input_len, max_output_len, src_lang, tgt_lang, tags_included, src_features):
         self.inputs = inputs
         self.labels = labels
         self.name = name # train, val, test
@@ -122,13 +124,46 @@ class SimplificationDataset(Dataset):
         self.src_lang = src_lang
         self.tgt_lang = tgt_lang
         self.tags_included = tags_included
+        self.src_features = src_features
 
     def __len__(self):
         return len(self.inputs)
 
     def __getitem__(self, idx):
         source = self.inputs[idx]['text']
-        target = self.labels[idx]['text'] 
+        target = self.labels[idx]['text']
+        
+        # alignment annotations
+        src_features = None
+        if self.src_features is not None:
+            # account for the eos_token which gets
+            # appended in the model's tokenization step
+            src_words = source.split() + [self.tokenizer.eos_token]
+            # note: eos_token token gets 0 as feature
+            src_features = self.src_features[idx]['text'].strip().split() + ['0']
+            
+            # ensure that lengths of features correspond to
+            # the length on the input text (separated by whtespace)
+            assert len(src_words) == len(src_features), f"[!] Input token sequence has different length to token feature sequence\n{src_words}\n{src_features}"
+            
+            # get the sub-word representation of each word
+            # e.g. [['de_DE', '], ['▁Gleich', 'stellung'], ['▁von'], ['▁Menschen'], ...]
+            src_sub_words = [self.tokenizer.sp_model.EncodeAsPieces(word) if word not in self.tokenizer.all_special_tokens_extended else [word] for word in src_words]
+
+            # expand each word-level feature to its
+            # corresponding sub-words (note: features are
+            # expected to be either 0 or 1)
+            src_sub_word_features = [[int(feature)] * len(sp_tok) for feature, sp_tok in zip(src_features, src_sub_words)]
+
+            # flatten 2D lists to 1D
+            src_sub_words = flatten(src_sub_words)
+            src_sub_word_features = flatten(src_sub_word_features)    
+
+            # ensure that lengths still match
+            assert len(src_sub_words) == len(src_sub_word_features), f"[!] Output token sequence has different length to sentiment sequence\n{src_sub_words}\n{src_sub_word_features}"
+            
+            src_features = torch.LongTensor(src_sub_word_features)
+
         if self.tags_included:
             sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], tgt_texts=[target], tags_included=True, max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt")
         else:
@@ -139,17 +174,28 @@ class SimplificationDataset(Dataset):
         if self.tags_included: # move language tag to the end of the sequence in source, also in target (so we can use mbarts shift_tokens_right that takes padding into account)
             input_ids = torch.cat([input_ids[1:], input_ids[:1]])
             output_ids = torch.cat([output_ids[1:], output_ids[:1]])
-        return input_ids, output_ids
+            if src_features is not None:
+                # in case source inputs are truncated,
+                # trim the corresponding feature sequence to
+                # the same length of the final input sequence
+                src_features = src_features[:len(input_ids)]
+                # move the feature corresponding to the
+                # language tag (originally in position 0)
+                # to the end of the sequence (as above)
+                src_features = torch.cat([src_features[1:], src_features[:1]])
+        
+        return input_ids, output_ids, src_features
 
     @staticmethod
     def collate_fn(batch):
         
         pad_token_id = 1
-    
-        input_ids, output_ids = list(zip(*batch))
+        input_ids, output_ids, src_features = list(zip(*batch))
         input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=pad_token_id)
         output_ids = torch.nn.utils.rnn.pad_sequence(output_ids, batch_first=True, padding_value=pad_token_id)
-        return input_ids, output_ids
+        if all(elem is not None for elem in src_features):
+            src_features = torch.nn.utils.rnn.pad_sequence(src_features, batch_first=True, padding_value=0)
+        return input_ids, output_ids, src_features
 
 
 class Simplifier(pl.LightningModule):
@@ -189,7 +235,7 @@ class Simplifier(pl.LightningModule):
         self.config.attention_mode = self.args.attention_mode
         self.config.attention_window = [self.args.attention_window] * self.config.encoder_layers
 
-    def forward(self, input_ids, output_ids):
+    def forward(self, input_ids, output_ids, input_features=None):
         input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id, self.args.global_attention_indices)
         decoder_input_ids = shift_tokens_right(output_ids, self.config.pad_token_id) # (in: output_ids, eos_token_id, tgt_lang_id out: tgt_lang_id, output_ids, eos_token_id)
         labels = decoder_input_ids[:, 1:].clone()
@@ -232,7 +278,7 @@ class Simplifier(pl.LightningModule):
 
         outputs = self.forward(*batch)
         vloss = outputs[0]
-        input_ids, output_ids = batch
+        input_ids, output_ids, input_features = batch
         input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id, self.args.global_attention_indices)
         if self.tags_included:
             # get list of target language tags
@@ -314,9 +360,18 @@ class Simplifier(pl.LightningModule):
     def _get_dataloader(self, current_dataloader, split_name, is_train):
         if current_dataloader is not None:
             return current_dataloader
-       
-        dataset = SimplificationDataset(inputs=self.datasets[split_name + "_source"], labels=self.datasets[split_name + "_target"] , name=split_name, tokenizer=self.tokenizer,
-                                       max_input_len=self.args.max_input_len, max_output_len=self.args.max_output_len, src_lang=self.src_lang, tgt_lang=self.tgt_lang, tags_included=args.tags_included)
+        
+        dataset = SimplificationDataset(
+            inputs=self.datasets[split_name + "_source"],
+            labels=self.datasets[split_name + "_target"] ,
+            name=split_name, tokenizer=self.tokenizer,
+            max_input_len=self.args.max_input_len,
+            max_output_len=self.args.max_output_len,
+            src_lang=self.src_lang,
+            tgt_lang=self.tgt_lang, 
+            tags_included=args.tags_included,
+            src_features=self.datasets.get(split_name + "_features", None)
+            )
       
         sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=is_train) if self.trainer.use_ddp else None
 
@@ -364,6 +419,11 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--src_lang", type=str, default=None, help="Source language tag (optional, for multilingual batches, preprocess text files to include language tags.")
         parser.add_argument("--tgt_lang", type=str, default=None, help="Target language tag (optional, for multilingual batches, preprocess text files to include language tags.")
         parser.add_argument("--tags_included", action='store_true', help="Text files already contain special tokens (language tags and </s>. Source:  src_tag seq, Target:  tgt_tag seq. Note: actual source sequence is seq src_tag </s>, will be changed internally after possibly clipping sequence to given max_length.")
+        
+        parser.add_argument("--train_features", type=str, default=None,  help="Path to alignment feature train file.")
+        parser.add_argument("--val_features", type=str, default=None, help="Path to alignment feature validation file.")
+        parser.add_argument("--test_features", type=str, default=None, help="Path to alignment feature test file (to evaluate after training is finished).")
+        
         parser.add_argument("--max_output_len", type=int, default=256, help="maximum num of wordpieces/summary. Used for training and testing")
         parser.add_argument("--max_input_len", type=int, default=512, help="maximum num of wordpieces/summary. Used for training and testing")
         parser.add_argument("--wandb", type=str, default=None, help="WandB project name to use if logging fine-tuning with WandB.")
@@ -427,9 +487,30 @@ def main(args):
                 print(name + ":" + str(param.data.shape))
         exit(0)
     
-  
-    model.datasets = datasets.load_dataset('text', data_files={'train_source': args.train_source, 'train_target': args.train_target, 'val_source': args.val_source, 'val_target': args.val_target, 'test_source': args.test_source, 'test_target': args.test_target })
-
+    # if alignment features provided load these as part of
+    # the dataset
+    if args.train_features and args.val_features and args.test_features:
+        model.datasets = datasets.load_dataset('text', data_files={
+            'train_source': args.train_source,
+            'train_features': args.train_features,
+            'train_target': args.train_target,
+            'val_source': args.val_source,
+            'val_features': args.val_features,
+            'val_target': args.val_target,
+            'test_source': args.test_source,
+            'test_features': args.test_features,
+            'test_target': args.test_target,
+            })
+    else:
+        model.datasets = datasets.load_dataset('text', data_files={
+            'train_source': args.train_source,
+            'train_target': args.train_target,
+            'val_source': args.val_source,
+            'val_target': args.val_target,
+            'test_source': args.test_source,
+            'test_target': args.test_target,
+            })
+    
     if args.wandb:
         logger = WandbLogger(project=args.wandb)
     else:
