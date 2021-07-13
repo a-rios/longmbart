@@ -288,9 +288,6 @@ class InferenceSimplifier(pl.LightningModule):
         target_tags = None
         if self.args.target_tags is not None or self.args.infer_target_tags:
             target_tags = self.datasets["target_tags"]
-        # src_features = None
-        # if self.args.test_features is not None:
-        #     src_features = self.datasets[split_name + "_features"]
 
         dataset = SimplificationDatasetForInference(
             inputs=self.datasets[split_name + "_source"],
@@ -403,25 +400,23 @@ def main(args):
     
     # load in data step-by-step for different configurations
     data_dict = datasets.load_dataset('text', data_files={'test_source': args.test_source})
-    
+
     if args.test_target is not None:
         target_dict = datasets.load_dataset('text', data_files={'test_target': args.test_target})
-        data_dict['test_target'] = target_dict
-
+        data_dict.update(target_dict)
     elif args.tags_included:
         # NOTE: tags_included expects input sequences to
         # be prefixed with a single language tag, e.g. de_DE
         if args.infer_target_tags:
-            target_tags_dict = {'text': [text.split()[0] for text in data_dict['test_source']['text']]}
-            data_dict['target_tags'] = datasets.Dataset.from_dict(target_tags_dict) 
+            target_tags_dict = datasets.Dataset.from_dict({'text': [text.split()[0] for text in data_dict['test_source']['text']]})
+            data_dict['target_tags'] = target_tags_dict # add with key
         elif args.target_tags is not None:
             target_tags_dict = datasets.load_dataset('text', data_files={'target_tags': args.target_tags})
-            data_dict['target_tags'] = target_tags_dict
+            data_dict.update(target_tags_dict)
         
-
     if args.test_features is not None:
         src_features_dict = datasets.load_dataset('text', data_files={'test_features': args.test_features})
-        data_dict['test_features'] = src_features_dict
+        data_dict.update(src_features_dict)
 
     simplifier.datasets = data_dict
 
