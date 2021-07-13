@@ -33,14 +33,14 @@ import datasets
 import collections
 
 from . import simplification
-from longformer.simplification import prepare_input, get_eval_scores
+from longformer.simplification import prepare_input, get_eval_scores, flatten
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
 class SimplificationDatasetForInference(Dataset):
-    def __init__(self, inputs, reference, name, tokenizer, max_input_len, max_output_len, src_lang, tgt_lang, tags_included, target_tags):
+    def __init__(self, inputs, reference, name, tokenizer, max_input_len, max_output_len, src_lang, tgt_lang, tags_included, target_tags, src_features):
         self.inputs = inputs
         self.reference = reference
         self.name = name # train, val, test
@@ -51,12 +51,45 @@ class SimplificationDatasetForInference(Dataset):
         self.tgt_lang = tgt_lang
         self.tags_included = tags_included
         self.target_tags = target_tags
+        self.src_features = src_features
 
     def __len__(self):
         return len(self.inputs)
 
     def __getitem__(self, idx):
         source = self.inputs[idx]['text']
+
+        # alignment annotations
+        src_features = None
+        if self.src_features is not None:
+            # account for the eos_token which gets
+            # appended in the model's tokenization step
+            src_words = source.split() + [self.tokenizer.eos_token]
+            # note: eos_token token gets 0 as feature
+            src_features = self.src_features[idx]['text'].strip().split() + ['0']
+            
+            # ensure that lengths of features correspond to
+            # the length on the input text (separated by whtespace)
+            assert len(src_words) == len(src_features), f"[!] Input token sequence has different length to token feature sequence\n{src_words}\n{src_features}"
+            
+            # get the sub-word representation of each word
+            # e.g. [['de_DE', '], ['▁Gleich', 'stellung'], ['▁von'], ['▁Menschen'], ...]
+            src_sub_words = [self.tokenizer.sp_model.EncodeAsPieces(word) if word not in self.tokenizer.all_special_tokens_extended else [word] for word in src_words]
+
+            # expand each word-level feature to its
+            # corresponding sub-words (note: features are
+            # expected to be either 0 or 1)
+            src_sub_word_features = [[int(feature)] * len(sp_tok) for feature, sp_tok in zip(src_features, src_sub_words)]
+
+            # flatten 2D lists to 1D
+            src_sub_words = flatten(src_sub_words)
+            src_sub_word_features = flatten(src_sub_word_features)    
+
+            # ensure that lengths still match
+            assert len(src_sub_words) == len(src_sub_word_features), f"[!] Output token sequence has different length to sentiment sequence\n{src_sub_words}\n{src_sub_word_features}"
+            
+            src_features = torch.LongTensor(src_sub_word_features)
+
         reference = None
         target_tags = None
         if self.reference is not None:
@@ -71,16 +104,28 @@ class SimplificationDatasetForInference(Dataset):
         input_ids = sample['input_ids'].squeeze()
         if self.tags_included: # move language tag to the end of the sequence in source
             input_ids = torch.cat([input_ids[1:], input_ids[:1]])
-        return input_ids, reference, target_tags
+            if src_features is not None:
+                # in case source inputs are truncated,
+                # trim the corresponding feature sequence to
+                # the same length of the final input sequence
+                src_features = src_features[:len(input_ids)]
+                # move the feature corresponding to the
+                # language tag (originally in position 0)
+                # to the end of the sequence (as above)
+                src_features = torch.cat([src_features[1:], src_features[:1]])
+        return input_ids, reference, target_tags, src_features
 
     @staticmethod
     def collate_fn(batch):
         
         pad_token_id = 1
     
-        input_ids, ref, target_tags = list(zip(*batch))
+        input_ids, ref, target_tags, src_features = list(zip(*batch))
         input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=pad_token_id)
-        return input_ids, ref, target_tags
+        if all(elem is not None for elem in src_features):
+            src_features = torch.nn.utils.rnn.pad_sequence(src_features, batch_first=True, padding_value=0)
+        
+        return input_ids, ref, target_tags, src_features
 
 
 class InferenceSimplifier(pl.LightningModule):
@@ -104,7 +149,7 @@ class InferenceSimplifier(pl.LightningModule):
         for p in self.model.parameters():
             p.requires_grad = False
 
-        input_ids, ref, tags  = batch
+        input_ids, ref, tags, input_features = batch
         input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id, self.args.global_attention_indices)
 
         if self.args.bad_words is not None:
@@ -241,12 +286,25 @@ class InferenceSimplifier(pl.LightningModule):
         if self.args.test_target is not None:
             reference = self.datasets[split_name + "_target"]
         target_tags = None
-        if self.args.target_tags is not None:
+        if self.args.target_tags is not None or self.args.infer_target_tags:
             target_tags = self.datasets["target_tags"]
-        elif self.args.infer_target_tags:
-            target_tags = self.datasets["target_tags"]
-        dataset = SimplificationDatasetForInference(inputs=self.datasets[split_name + "_source"], reference=reference , name=split_name, tokenizer=self.tokenizer,
-                                       max_input_len=self.max_input_len, max_output_len=self.max_output_len, src_lang=self.src_lang, tgt_lang=self.tgt_lang, tags_included=self.tags_included, target_tags=target_tags)
+        # src_features = None
+        # if self.args.test_features is not None:
+        #     src_features = self.datasets[split_name + "_features"]
+
+        dataset = SimplificationDatasetForInference(
+            inputs=self.datasets[split_name + "_source"],
+            reference=reference,
+            name=split_name,
+            tokenizer=self.tokenizer,
+            max_input_len=self.max_input_len,
+            max_output_len=self.max_output_len,
+            src_lang=self.src_lang,
+            tgt_lang=self.tgt_lang,
+            tags_included=self.tags_included,
+            target_tags=target_tags,
+            src_features=self.datasets.get(split_name + "_features", None),
+            )
       
         sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=is_train) if self.trainer.use_ddp else None
 
@@ -287,7 +345,9 @@ class InferenceSimplifier(pl.LightningModule):
         parser.add_argument("--used_bad_words", type=str, default=None, help="Path to file where used bad words should be saved.")
         # TODO
         # parser.add_argument("--do_predict", action="store_true", default=False, help="If given, predictions are run using the `predict_step()` method rather than `test_step()`. Outputs are written to the specified output file without being evaluated!")
+        parser.add_argument("--test_features", type=str, default=None, help="Path to alignment feature test file (to evaluate after training is finished).")
         
+
         parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
         parser.add_argument("--num_workers", type=int, default=0, help="Number of data loader workers")
         parser.add_argument("--gpus", type=int, default=-1, help="Number of gpus. 0 for CPU")
@@ -333,7 +393,7 @@ def main(args):
     simplifier.model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.model_path)
    
     simplifier.load_state_dict(cp["state_dict"])
-    #simplifier.load_from_checkpoint(checkpoint_path, args) ## does not work ("unexpected keys")
+    # simplifier.load_from_checkpoint(checkpoint_path, args) ## does not work ("unexpected keys")
      
     if args.print_params:
         for name, param in simplifier.named_parameters():
@@ -341,25 +401,31 @@ def main(args):
                 print(name + ":" + str(param.data.shape))
         exit(0)
     
+    # load in data step-by-step for different configurations
+    data_dict = datasets.load_dataset('text', data_files={'test_source': args.test_source})
+    
     if args.test_target is not None:
-        simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source, 'test_target': args.test_target })
-    else:
-        if args.tags_included and args.infer_target_tags:
-            # source texts must start in with a single valid language tag,
-            # e.g. de_DE, en_XX, etc.
-            data_dict = datasets.load_dataset('text', data_files={'test_source': args.test_source})
-            # datasets library allows loading from an
-            # in-memory dict, so construct one from the source
-            # text tags that can be loaded
-            # NOTE: tags_included expects input sequences to
-            # be prefixed with a single language tag, e.g. de_DE
-            target_tags_dict = {'text': [text.split()[0] for text in data_dict['test_source']['text']]} 
-            data_dict['target_tags'] = datasets.Dataset.from_dict(target_tags_dict)
-            simplifier.datasets = data_dict
+        target_dict = datasets.load_dataset('text', data_files={'test_target': args.test_target})
+        data_dict['test_target'] = target_dict
+
+    elif args.tags_included:
+        # NOTE: tags_included expects input sequences to
+        # be prefixed with a single language tag, e.g. de_DE
+        if args.infer_target_tags:
+            target_tags_dict = {'text': [text.split()[0] for text in data_dict['test_source']['text']]}
+            data_dict['target_tags'] = datasets.Dataset.from_dict(target_tags_dict) 
         elif args.target_tags is not None:
-            simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source, 'target_tags': args.target_tags })
-        else:
-            simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source })
+            target_tags_dict = datasets.load_dataset('text', data_files={'target_tags': args.target_tags})
+            data_dict['target_tags'] = target_tags_dict
+        
+
+    if args.test_features is not None:
+        src_features_dict = datasets.load_dataset('text', data_files={'test_features': args.test_features})
+        data_dict['test_features'] = src_features_dict
+
+    simplifier.datasets = data_dict
+
+
 
     logger = TestTubeLogger(
         save_dir=".",
