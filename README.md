@@ -96,3 +96,14 @@ python -m longformer.simplify \
 ```
 Reference file is optional, if given, will print evaluation metrics (rouge1, rouge2, rougeL, rougeLsum, bleu). 
 If only one target language, use `--tgt_lang` to set, if multiple languages, either give a reference file with tags (`tgt_lang target_sequence`) with `--tags_included` or just a list of target tags with `--target_tags` (one tag per line for each sample in `--test_source`).
+
+## Alignment Attention
+
+If available, the model accepts additional token-level
+features (e.g. binary alignment span annotations). These can
+be passed to both `simplification.py` and `simplify.py` 
+with the arguments:
+
+- `--train_features`
+- `--val_features`
+- `--test_features`
