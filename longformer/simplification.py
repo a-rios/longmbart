@@ -32,6 +32,45 @@ import datasets
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+def alignment_attention_loss(cross_attentions, input_features, attention_mass=0.1, ignore_index=-100):
+    """
+    Custom loss function to encourage model to pay attention
+    to aligned segments.
+
+    Intuition: 
+        - compute the cumulative attention put on the
+        alignment spans
+        - loss is defined in terms of % of attention on the whole span (relative to the whole
+        sequence length)
+    """
+    breakpoint()
+    loss = 0
+
+    # get token indices of alignments spans
+    align_span_indices = (input_features.squeeze() != 0).nonzero(as_tuple=True)[0]
+
+    # on first element in the cross_attentions tuple
+    attention_mass_on_spans = torch.index_select(cross_attentions[0], dim=-1, index=align_span_indices).sum(dim=-1)
+    
+    """
+    for head 0 at time step 0, total attention mass across alignment
+    spans is 0.0512.
+    tensor([[[0.0512, 0.0907, 0.0665,  ..., 0.0512, 0.0615, 0.0593],
+         [0.0973, 0.0745, 0.0739,  ..., 0.0495, 0.0705, 0.2091],
+         [0.0978, 0.0670, 0.0674,  ..., 0.0364, 0.0384, 0.0846],
+         ...,
+         [0.1245, 0.1247, 0.1169,  ..., 0.1281, 0.0629, 0.0478],
+         [0.0366, 0.2610, 0.1930,  ..., 0.2468, 0.2509, 0.2574],
+         [0.2418, 0.1413, 0.1885,  ..., 0.1352, 0.1417, 0.0439]]],
+       device='cuda:0')
+    """
+    
+    # minimun attention mass on alignment spans
+    attention_mass_on_spans.min(dim=-1).values
+    # todo define the actuall loss value given the min
+    # attention mass values(?)
+    
+    return loss    
 
 def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=-100):
     """From fairseq"""
@@ -242,13 +281,27 @@ class Simplifier(pl.LightningModule):
         decoder_input_ids = decoder_input_ids[:, :-1] # without eos/last pad
         decoder_attention_mask = (decoder_input_ids != self.tokenizer.pad_token_id)
 
+        # NOTE: --grad_ckpt must be False to get output_attentions
         outputs = self.model(
                 input_ids,
                 attention_mask=attention_mask,
                 decoder_input_ids=decoder_input_ids,
                 decoder_attention_mask=decoder_attention_mask,
-                use_cache=False,)
+                use_cache=False,
+                output_attentions=True)
+
+        breakpoint()
         lm_logits = outputs[0]
+        
+        # attentions are tuples of float tensors (one for
+        # each layer)
+        # outputs.cross_attentions[0].shape = (batch_size, heads, target_length, source_length)
+        att_loss = 0
+        if outputs.cross_attentions is not None:
+            att_loss = alignment_attention_loss(outputs.cross_attentions, input_features, attention_mass=self.args.alignment_attention_mass)
+
+        breakpoint()
+
         if self.args.label_smoothing == 0:
             # Same behavior as modeling_bart.py, besides ignoring pad_token_id
             ce_loss_fct = torch.nn.CrossEntropyLoss(ignore_index=self.tokenizer.pad_token_id)
@@ -469,6 +522,9 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--debug", action='store_true', help="debug run")
         parser.add_argument("--print_params", action='store_true', help="Print parameter names and shapes.")
         
+        parser.add_argument("--alignment_attention_mass", type=float, default=0.1, help="Portion of attention mass that should be applied to aligned segments in source text")
+        
+
         return parser
 
 
