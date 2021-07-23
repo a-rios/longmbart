@@ -58,33 +58,52 @@ def alignment_attention_loss(
         sequence length)
     """
 
-    # breakpoint()
-    # loss = 0
-
     # cross_attentions is a tuple of float tensors (one for each layer)
     # select cross_attention for specified layer
     cross_attentions = cross_attentions[att_layer-1]
+    
     bsz, heads, tgt_length, src_length = cross_attentions.shape
-    # select cross_attention for specified head =>
-    # cross_attentions.shape = (batsch_size, target_length, source_length)
-    cross_attentions = cross_attentions[:,head,:,:]
+    
+    # select cross_attention for specified head 
+    cross_attentions = cross_attentions[:,head,:,:] # => cross_attentions.shape = (batch_size, target_length, source_length)
 
-    # input_features.shape = (batsch_size, source_length)
+    # input_features.shape = (batch_size, source_length)
     align_span_indices = [(i != 0).nonzero(as_tuple=False).squeeze(-1) for i in input_features] # => list of tensors (one for each item in batch) containing indices corresponding to aligned segments
     
-    # average attention mass of the aligned source positions across all target positions
-    avg_attention_mass_on_spans = torch.stack([torch.index_select(i, dim=-1, index=j).sum(dim=-1).mean().unsqueeze(0) for i, j in zip(cross_attentions, align_span_indices)])
+    # breakpoint()
+    # compute average attention mass of the aligned source positions across all target positions
     
-    # uniform_att_dist_on_src = input_lens.view(bsz, -1).float().reciprocal()
-    # uniform_att_mass_on_src = (uniform_att_dist_on_src.squeeze() * output_lens).view(bsz, -1)
-    
-    uniform_att_dist_on_spans = input_features.sum(dim=-1).view(bsz, -1).float().reciprocal()
-    uniform_att_mass_on_spans = (uniform_att_dist_on_spans.squeeze() * input_features.sum(dim=-1)).view(bsz, -1) * attention_mass
+    total_attention_mass_on_spans = torch.stack(
+        [torch.index_select(cross_attentions[i], dim=-1, index=align_span_indices[i]).sum(dim=-1).sum(dim=-1) for i in range(bsz)]
+        )
 
-    loss_per_item = uniform_att_mass_on_spans - avg_attention_mass_on_spans
+    # compute average by dividing by the true tgt lengths (no padding)
+    avg_attention_mass_on_spans = total_attention_mass_on_spans / output_lens # => shape = (batch_size)
     
-    scaling_factor = torch.Tensor([len(i) / j.item() for i, j in zip(align_span_indices, input_lens)]).view(bsz, -1).cuda()
+    # reference values are the expected attention mass 
+    # ocross all source tokens given a uniform distribution
+    uniform_att_dist_on_src = input_lens.float().reciprocal() # => shape = (batch_size)
+    uniform_att_mass_on_src = uniform_att_dist_on_src * output_lens # => shape = (batch_size)
+    
+    # uniform_att_dist_on_spans = input_features.sum(dim=-1).view(bsz, -1).float().reciprocal()
+    # uniform_att_mass_on_spans = (uniform_att_dist_on_spans.squeeze() * input_features.sum(dim=-1)).view(bsz, -1) * attention_mass
 
+    # loss is defined as the difference between the
+    # reference value and the average attention mass on
+    # tokens in alignment spans
+    loss_per_item = uniform_att_mass_on_src - avg_attention_mass_on_spans
+    
+    # zero-out negative loss values (i.e. where avg
+    # attention is already > expected uniform values)
+    loss_per_item[loss_per_item < 0] = 0.0
+
+    # compute the ratio of aligned span tokens to
+    # non-aligned span tokens in source text
+    scaling_factor = torch.Tensor([len(align_span_indices[i]) / input_lens[i].item() for i in range(bsz)]).to(cross_attentions.device)
+
+    # multiply by each item's individual loss by its
+    # relevant scaling factor - items with no alignment
+    # spans will be zero.
     loss_per_item_scaled = loss_per_item * scaling_factor
     
     total_loss_scaled = nansum(loss_per_item_scaled)
@@ -318,19 +337,15 @@ class Simplifier(pl.LightningModule):
                 use_cache=False,
                 output_attentions=True)
 
-        # breakpoint()
         lm_logits = outputs[0]
         
-        # attentions are tuples of float tensors (one for
-        # each layer)
-        # outputs.cross_attentions[0].shape = (batch_size, heads, target_length, source_length)
+        # attentions are tuples of float tensors (one for each layer)
+
         att_loss = 0
         if (outputs.cross_attentions is not None) and (input_features is not None):
             input_lens = (input_ids != self.tokenizer.pad_token_id).sum(dim=-1)
             output_lens = (output_ids != self.tokenizer.pad_token_id).sum(dim=-1)
             att_loss = alignment_attention_loss(outputs.cross_attentions, input_features, input_lens, output_lens, attention_mass=self.args.alignment_attention_mass)
-
-        print(att_loss)
 
         if self.args.label_smoothing == 0:
             # Same behavior as modeling_bart.py, besides ignoring pad_token_id
@@ -342,14 +357,21 @@ class Simplifier(pl.LightningModule):
             loss, nll_loss = label_smoothed_nll_loss(
                 lprobs, labels, self.args.label_smoothing, ignore_index=self.tokenizer.pad_token_id
             )
-        # return [loss]
         
-        cust_loss = loss + (self.args.att_loss_lambda * att_loss)
-        return [cust_loss]
+        combined_loss = loss + (self.args.att_loss_lambda * att_loss)
+    
+        return {
+            'loss': loss,
+            'losses': {
+                'attention_alignment_loss': att_loss,
+                'combined_loss': combined_loss
+                }
+            }
 
     def training_step(self, batch, batch_nb):
         output = self.forward(*batch)
-        loss = output[0]
+        # breakpoint()
+        loss = output['losses']['combined_loss']
         lr = loss.new_zeros(1) + self.trainer.optimizers[0].param_groups[0]['lr']
         tensorboard_logs = {'train_loss': loss, 'lr': lr,
                             'input_size': batch[0].numel(),
@@ -363,7 +385,8 @@ class Simplifier(pl.LightningModule):
             p.requires_grad = False
 
         outputs = self.forward(*batch)
-        vloss = outputs[0]
+        # vloss = outputs[0]
+        vloss = outputs['losses']['combined_loss']
         input_ids, output_ids, input_features = batch
         input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id, self.args.global_attention_indices)
         if self.tags_included:
