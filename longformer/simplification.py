@@ -2,8 +2,10 @@ import os
 import argparse
 import random
 import numpy as np
-
+from typing import Optional, Tuple, List
 import torch
+from torch import Tensor
+
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoConfig
 from transformers.optimization import get_linear_schedule_with_warmup, Adafactor
@@ -32,7 +34,19 @@ import datasets
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-def alignment_attention_loss(cross_attentions, input_features, attention_mass=0.1, ignore_index=-100):
+def nansum(x):
+    # Define nansum, as pytorch 1.6.x doesn't offer it inbuilt.
+    return x[~torch.isnan(x)].sum()
+
+def alignment_attention_loss(
+    cross_attentions: Tuple[Tensor], 
+    input_features: Tensor, 
+    input_lens: List[int], 
+    output_lens: List[int],
+    attention_mass: float = 0.1, 
+    att_layer: int = 3,
+    head: int = -1,
+    ):
     """
     Custom loss function to encourage model to pay attention
     to aligned segments.
@@ -43,34 +57,39 @@ def alignment_attention_loss(cross_attentions, input_features, attention_mass=0.
         - loss is defined in terms of % of attention on the whole span (relative to the whole
         sequence length)
     """
-    breakpoint()
-    loss = 0
 
-    # get token indices of alignments spans
-    align_span_indices = (input_features.squeeze() != 0).nonzero(as_tuple=True)[0]
+    # breakpoint()
+    # loss = 0
 
-    # on first element in the cross_attentions tuple
-    attention_mass_on_spans = torch.index_select(cross_attentions[0], dim=-1, index=align_span_indices).sum(dim=-1)
+    # cross_attentions is a tuple of float tensors (one for each layer)
+    # select cross_attention for specified layer
+    cross_attentions = cross_attentions[att_layer-1]
+    bsz, heads, tgt_length, src_length = cross_attentions.shape
+    # select cross_attention for specified head =>
+    # cross_attentions.shape = (batsch_size, target_length, source_length)
+    cross_attentions = cross_attentions[:,head,:,:]
+
+    # input_features.shape = (batsch_size, source_length)
+    align_span_indices = [(i != 0).nonzero(as_tuple=False).squeeze(-1) for i in input_features] # => list of tensors (one for each item in batch) containing indices corresponding to aligned segments
     
-    """
-    for head 0 at time step 0, total attention mass across alignment
-    spans is 0.0512.
-    tensor([[[0.0512, 0.0907, 0.0665,  ..., 0.0512, 0.0615, 0.0593],
-         [0.0973, 0.0745, 0.0739,  ..., 0.0495, 0.0705, 0.2091],
-         [0.0978, 0.0670, 0.0674,  ..., 0.0364, 0.0384, 0.0846],
-         ...,
-         [0.1245, 0.1247, 0.1169,  ..., 0.1281, 0.0629, 0.0478],
-         [0.0366, 0.2610, 0.1930,  ..., 0.2468, 0.2509, 0.2574],
-         [0.2418, 0.1413, 0.1885,  ..., 0.1352, 0.1417, 0.0439]]],
-       device='cuda:0')
-    """
+    # average attention mass of the aligned source positions across all target positions
+    avg_attention_mass_on_spans = torch.stack([torch.index_select(i, dim=-1, index=j).sum(dim=-1).mean().unsqueeze(0) for i, j in zip(cross_attentions, align_span_indices)])
     
-    # minimun attention mass on alignment spans
-    attention_mass_on_spans.min(dim=-1).values
-    # todo define the actuall loss value given the min
-    # attention mass values(?)
+    # uniform_att_dist_on_src = input_lens.view(bsz, -1).float().reciprocal()
+    # uniform_att_mass_on_src = (uniform_att_dist_on_src.squeeze() * output_lens).view(bsz, -1)
     
-    return loss    
+    uniform_att_dist_on_spans = input_features.sum(dim=-1).view(bsz, -1).float().reciprocal()
+    uniform_att_mass_on_spans = (uniform_att_dist_on_spans.squeeze() * input_features.sum(dim=-1)).view(bsz, -1) * attention_mass
+
+    loss_per_item = uniform_att_mass_on_spans - avg_attention_mass_on_spans
+    
+    scaling_factor = torch.Tensor([len(i) / j.item() for i, j in zip(align_span_indices, input_lens)]).view(bsz, -1).cuda()
+
+    loss_per_item_scaled = loss_per_item * scaling_factor
+    
+    total_loss_scaled = nansum(loss_per_item_scaled)
+
+    return total_loss_scaled.item()
 
 def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=-100):
     """From fairseq"""
@@ -168,6 +187,37 @@ class SimplificationDataset(Dataset):
     def __len__(self):
         return len(self.inputs)
 
+    def convert_word_alignmnet_features_to_sub_word(self, word_sequence: str, feature_sequence: str) -> torch.Tensor:
+        """
+        words: source or target string
+        """
+        # account for the eos_token which gets
+        # appended in the model's tokenization step
+        words = word_sequence.split() + [self.tokenizer.eos_token]
+        # eos_token token gets 0 as feature
+        features = feature_sequence.split() + ['0']            
+        # ensure that lengths of features correspond to
+        # the length on the input text (separated by whtespace)
+        assert len(words) == len(features), f"[!] Input token sequence has different length to token feature sequence\n{words}\n{features}"
+        
+        # get the sub-word representation of each word
+        # e.g. [['de_DE', '], ['▁Gleich', 'stellung'], ['▁von'], ['▁Menschen'], ...]
+        sub_words = [self.tokenizer.sp_model.EncodeAsPieces(word) if word not in self.tokenizer.all_special_tokens_extended else [word] for word in words]
+        # expand each word-level feature to its
+        # corresponding sub-words (note: features are
+        # expected to be either 0 or 1)
+        sub_word_features = [[int(feature)] * len(sp_tok) for feature, sp_tok in zip(features, sub_words)]
+
+        # flatten 2D lists to 1D
+        sub_words = flatten(sub_words)
+        sub_word_features = flatten(sub_word_features)    
+
+        # ensure that lengths still match
+        assert len(sub_words) == len(sub_word_features), f"[!] Output token sequence has different length to sentiment sequence\n{sub_words}\n{sub_word_features}"
+        
+        features = torch.LongTensor(sub_word_features)
+        return features
+
     def __getitem__(self, idx):
         source = self.inputs[idx]['text']
         target = self.labels[idx]['text']
@@ -175,34 +225,9 @@ class SimplificationDataset(Dataset):
         # alignment annotations
         src_features = None
         if self.src_features is not None:
-            # account for the eos_token which gets
-            # appended in the model's tokenization step
-            src_words = source.split() + [self.tokenizer.eos_token]
-            # note: eos_token token gets 0 as feature
-            src_features = self.src_features[idx]['text'].strip().split() + ['0']
-            
-            # ensure that lengths of features correspond to
-            # the length on the input text (separated by whtespace)
-            assert len(src_words) == len(src_features), f"[!] Input token sequence has different length to token feature sequence\n{src_words}\n{src_features}"
-            
-            # get the sub-word representation of each word
-            # e.g. [['de_DE', '], ['▁Gleich', 'stellung'], ['▁von'], ['▁Menschen'], ...]
-            src_sub_words = [self.tokenizer.sp_model.EncodeAsPieces(word) if word not in self.tokenizer.all_special_tokens_extended else [word] for word in src_words]
-
-            # expand each word-level feature to its
-            # corresponding sub-words (note: features are
-            # expected to be either 0 or 1)
-            src_sub_word_features = [[int(feature)] * len(sp_tok) for feature, sp_tok in zip(src_features, src_sub_words)]
-
-            # flatten 2D lists to 1D
-            src_sub_words = flatten(src_sub_words)
-            src_sub_word_features = flatten(src_sub_word_features)    
-
-            # ensure that lengths still match
-            assert len(src_sub_words) == len(src_sub_word_features), f"[!] Output token sequence has different length to sentiment sequence\n{src_sub_words}\n{src_sub_word_features}"
-            
-            src_features = torch.LongTensor(src_sub_word_features)
-
+            src_features = self.src_features[idx]['text']
+            src_features = self.convert_word_alignmnet_features_to_sub_word(source, src_features)
+        
         if self.tags_included:
             sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], tgt_texts=[target], tags_included=True, max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt")
         else:
@@ -227,13 +252,16 @@ class SimplificationDataset(Dataset):
 
     @staticmethod
     def collate_fn(batch):
-        
+        # breakpoint()
         pad_token_id = 1
         input_ids, output_ids, src_features = list(zip(*batch))
+        # input_lens = torch.LongTensor([len(i) for i in input_ids])
+        # output_lens = torch.LongTensor([len(i) for i in output_ids])
         input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=pad_token_id)
         output_ids = torch.nn.utils.rnn.pad_sequence(output_ids, batch_first=True, padding_value=pad_token_id)
         if all(elem is not None for elem in src_features):
             src_features = torch.nn.utils.rnn.pad_sequence(src_features, batch_first=True, padding_value=0)
+        
         return input_ids, output_ids, src_features
 
 
@@ -274,7 +302,7 @@ class Simplifier(pl.LightningModule):
         self.config.attention_mode = self.args.attention_mode
         self.config.attention_window = [self.args.attention_window] * self.config.encoder_layers
 
-    def forward(self, input_ids, output_ids, input_features=None):
+    def forward(self, input_ids, output_ids, input_features=None,):
         input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id, self.args.global_attention_indices)
         decoder_input_ids = shift_tokens_right(output_ids, self.config.pad_token_id) # (in: output_ids, eos_token_id, tgt_lang_id out: tgt_lang_id, output_ids, eos_token_id)
         labels = decoder_input_ids[:, 1:].clone()
@@ -290,17 +318,19 @@ class Simplifier(pl.LightningModule):
                 use_cache=False,
                 output_attentions=True)
 
-        breakpoint()
+        # breakpoint()
         lm_logits = outputs[0]
         
         # attentions are tuples of float tensors (one for
         # each layer)
         # outputs.cross_attentions[0].shape = (batch_size, heads, target_length, source_length)
         att_loss = 0
-        if outputs.cross_attentions is not None:
-            att_loss = alignment_attention_loss(outputs.cross_attentions, input_features, attention_mass=self.args.alignment_attention_mass)
+        if (outputs.cross_attentions is not None) and (input_features is not None):
+            input_lens = (input_ids != self.tokenizer.pad_token_id).sum(dim=-1)
+            output_lens = (output_ids != self.tokenizer.pad_token_id).sum(dim=-1)
+            att_loss = alignment_attention_loss(outputs.cross_attentions, input_features, input_lens, output_lens, attention_mass=self.args.alignment_attention_mass)
 
-        breakpoint()
+        print(att_loss)
 
         if self.args.label_smoothing == 0:
             # Same behavior as modeling_bart.py, besides ignoring pad_token_id
@@ -312,7 +342,10 @@ class Simplifier(pl.LightningModule):
             loss, nll_loss = label_smoothed_nll_loss(
                 lprobs, labels, self.args.label_smoothing, ignore_index=self.tokenizer.pad_token_id
             )
-        return [loss]
+        # return [loss]
+        
+        cust_loss = loss + (self.args.att_loss_lambda * att_loss)
+        return [cust_loss]
 
     def training_step(self, batch, batch_nb):
         output = self.forward(*batch)
@@ -523,6 +556,8 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--print_params", action='store_true', help="Print parameter names and shapes.")
         
         parser.add_argument("--alignment_attention_mass", type=float, default=0.1, help="Portion of attention mass that should be applied to aligned segments in source text")
+        parser.add_argument("--att_loss_lambda", type=float, default=1.0, help="Lambda value for weighting cutsom attention loss")
+        
         
 
         return parser
