@@ -41,26 +41,37 @@ def nansum(x):
 def alignment_attention_loss(
     cross_attentions: Tuple[Tensor], 
     input_features: Tensor, 
-    input_lens: List[int], 
-    output_lens: List[int],
+    input_lens: Tensor, 
+    output_lens: Tensor,
     attention_mass: float = 0.1, 
-    att_layer: int = 3,
+    layer: int = 2,
     head: int = -1,
     ):
     """
     Custom loss function to encourage model to pay attention
-    to aligned segments.
+    to aligned segments where provided.
 
     Intuition: 
-        - compute the cumulative attention put on the
+        - computes the cumulative attention on the annotated
         alignment spans
-        - loss is defined in terms of % of attention on the whole span (relative to the whole
-        sequence length)
+        - loss is defined as the difference between the
+        reference value of expected attention mass 
+        (assumed to be a uniform distribution of the
+        total attention mass over the source sequence) 
+        and the average attention mass on all aligned tokens
+
+    params:
+        attention_mass: hyperparameter for deciding how much
+        of the total attention should be directed towards
+        aligned segments
+        layer: cross attention encoder layer for which to
+        compute loss
+        head: attention head for which to compute loss
     """
 
     # cross_attentions is a tuple of float tensors (one for each layer)
     # select cross_attention for specified layer
-    cross_attentions = cross_attentions[att_layer-1]
+    cross_attentions = cross_attentions[layer]
     
     bsz, heads, tgt_length, src_length = cross_attentions.shape
     
@@ -70,27 +81,25 @@ def alignment_attention_loss(
     # input_features.shape = (batch_size, source_length)
     align_span_indices = [(i != 0).nonzero(as_tuple=False).squeeze(-1) for i in input_features] # => list of tensors (one for each item in batch) containing indices corresponding to aligned segments
     
-    # breakpoint()
-    # compute average attention mass of the aligned source positions across all target positions
-    
+    # compute attention mass of the aligned source positions across all target positions    
     total_attention_mass_on_spans = torch.stack(
         [torch.index_select(cross_attentions[i], dim=-1, index=align_span_indices[i]).sum(dim=-1).sum(dim=-1) for i in range(bsz)]
         )
-
     # compute average by dividing by the true tgt lengths (no padding)
     avg_attention_mass_on_spans = total_attention_mass_on_spans / output_lens # => shape = (batch_size)
     
     # reference values are the expected attention mass 
     # ocross all source tokens given a uniform distribution
     uniform_att_dist_on_src = input_lens.float().reciprocal() # => shape = (batch_size)
-    uniform_att_mass_on_src = uniform_att_dist_on_src * output_lens # => shape = (batch_size)
+    uniform_att_mass_on_src = uniform_att_dist_on_src * output_lens * attention_mass # => shape = (batch_size)
     
-    # uniform_att_dist_on_spans = input_features.sum(dim=-1).view(bsz, -1).float().reciprocal()
-    # uniform_att_mass_on_spans = (uniform_att_dist_on_spans.squeeze() * input_features.sum(dim=-1)).view(bsz, -1) * attention_mass
+    # uniform_att_dist_on_spans = input_features.sum(dim=-1).float().reciprocal()
+    # uniform_att_mass_on_spans = uniform_att_dist_on_spans * output_lens * attention_mass
 
     # loss is defined as the difference between the
-    # reference value and the average attention mass on
-    # tokens in alignment spans
+    # reference value (assumed to be a uniform distribution
+    # of the total attention mass over the source sequence) 
+    # and the average attention mass on tokens in alignment spans
     loss_per_item = uniform_att_mass_on_src - avg_attention_mass_on_spans
     
     # zero-out negative loss values (i.e. where avg
@@ -105,7 +114,6 @@ def alignment_attention_loss(
     # relevant scaling factor - items with no alignment
     # spans will be zero.
     loss_per_item_scaled = loss_per_item * scaling_factor
-    
     total_loss_scaled = nansum(loss_per_item_scaled)
 
     return total_loss_scaled.item()
@@ -271,11 +279,8 @@ class SimplificationDataset(Dataset):
 
     @staticmethod
     def collate_fn(batch):
-        # breakpoint()
         pad_token_id = 1
         input_ids, output_ids, src_features = list(zip(*batch))
-        # input_lens = torch.LongTensor([len(i) for i in input_ids])
-        # output_lens = torch.LongTensor([len(i) for i in output_ids])
         input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=pad_token_id)
         output_ids = torch.nn.utils.rnn.pad_sequence(output_ids, batch_first=True, padding_value=pad_token_id)
         if all(elem is not None for elem in src_features):
@@ -345,7 +350,7 @@ class Simplifier(pl.LightningModule):
         if (outputs.cross_attentions is not None) and (input_features is not None):
             input_lens = (input_ids != self.tokenizer.pad_token_id).sum(dim=-1)
             output_lens = (output_ids != self.tokenizer.pad_token_id).sum(dim=-1)
-            att_loss = alignment_attention_loss(outputs.cross_attentions, input_features, input_lens, output_lens, attention_mass=self.args.alignment_attention_mass)
+            att_loss = alignment_attention_loss(outputs.cross_attentions, input_features, input_lens, output_lens, attention_mass=self.args.att_loss_mass, layer=self.args.att_loss_layer, head=self.args.att_loss_head)
 
         if self.args.label_smoothing == 0:
             # Same behavior as modeling_bart.py, besides ignoring pad_token_id
@@ -379,7 +384,6 @@ class Simplifier(pl.LightningModule):
                             'input_size': batch[0].numel(),
                             'output_size': batch[1].numel(),
                             'mem': torch.cuda.memory_allocated(loss.device) / 1024 ** 3 if torch.cuda.is_available() else 0}
-        # breakpoint()
         self.log('train-loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=False)
         self.log('ce_loss', ce_loss, on_step=True, on_epoch=True, prog_bar=True, logger=False)
         self.log('align_att_loss', att_loss, on_step=True, on_epoch=True, prog_bar=True, logger=False)
@@ -587,8 +591,12 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--debug", action='store_true', help="debug run")
         parser.add_argument("--print_params", action='store_true', help="Print parameter names and shapes.")
         
-        parser.add_argument("--alignment_attention_mass", type=float, default=0.1, help="Portion of attention mass that should be applied to aligned segments in source text")
+        # custom loss for attention on alignment spans
+        parser.add_argument("--att_loss_mass", type=float, default=0.1, help="Percentage of attention mass that should be applied to aligned segments in source text")
         parser.add_argument("--att_loss_lambda", type=float, default=1.0, help="Lambda value for weighting cutsom attention loss")
+        parser.add_argument("--att_loss_head", type=int, default=2, help="Attention head for wich attention on aligned spans is computed and incorporated into custom loss function. Note, parameter is zero-indexed (i.e. possible values [0-15]")
+        parser.add_argument("--att_loss_layer", type=int, default=-1, help="Layer for wich attention on aligned spans is computed and incorporated into custom loss function (default = last layer (i.e. -1))")
+        
         
         
 
