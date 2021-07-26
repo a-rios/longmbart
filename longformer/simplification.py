@@ -370,14 +370,19 @@ class Simplifier(pl.LightningModule):
 
     def training_step(self, batch, batch_nb):
         output = self.forward(*batch)
-        # breakpoint()
         loss = output['losses']['combined_loss']
+        att_loss = output['losses']['attention_alignment_loss']
+        ce_loss = output['loss']
+
         lr = loss.new_zeros(1) + self.trainer.optimizers[0].param_groups[0]['lr']
         tensorboard_logs = {'train_loss': loss, 'lr': lr,
                             'input_size': batch[0].numel(),
                             'output_size': batch[1].numel(),
                             'mem': torch.cuda.memory_allocated(loss.device) / 1024 ** 3 if torch.cuda.is_available() else 0}
+        # breakpoint()
         self.log('train-loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=False)
+        self.log('ce_loss', ce_loss, on_step=True, on_epoch=True, prog_bar=True, logger=False)
+        self.log('align_att_loss', att_loss, on_step=True, on_epoch=True, prog_bar=True, logger=False)
         return loss
 
     def validation_step(self, batch, batch_nb):
@@ -385,8 +390,10 @@ class Simplifier(pl.LightningModule):
             p.requires_grad = False
 
         outputs = self.forward(*batch)
-        # vloss = outputs[0]
         vloss = outputs['losses']['combined_loss']
+        att_loss = outputs['losses']['attention_alignment_loss']
+        ce_loss = outputs['loss']
+
         input_ids, output_ids, input_features = batch
         input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id, self.args.global_attention_indices)
         if self.tags_included:
@@ -414,6 +421,8 @@ class Simplifier(pl.LightningModule):
             for sample in generated_str:
                 f.write(sample + "\n")
         self.log('vloss', vloss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('ce_loss', ce_loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('att_loss', att_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log('bleu', scores['bleu'], on_step=False, on_epoch=True, prog_bar=True)
         self.log('rouge1', scores['rouge1'], on_step=False, on_epoch=True, prog_bar=True)
         self.log('rouge2', scores['rouge2'], on_step=False, on_epoch=True, prog_bar=True)
