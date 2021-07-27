@@ -89,22 +89,18 @@ def alignment_attention_loss(
         )
     # compute average by dividing by the true tgt lengths (no padding)
     avg_attention_mass_on_spans = total_attention_mass_on_spans / output_lens # => shape = (batch_size)
+    num_in_span_tokens = torch.LongTensor([i.size() for i in align_span_indices]).view(-1).to(cross_attentions.device) # => shape = (batch_size)
     
-    num_in_span_tokens = torch.LongTensor([i.size() for i in align_span_indices]).squeeze().to(cross_attentions.device)
     # reference values are the expected attention mass 
     # ocross all source tokens given a uniform distribution
-    uniform_att_dist_on_src = input_lens.float().reciprocal() # => shape = (batch_size)
-    expected_att_mass_on_spans = (output_lens.true_divide(num_in_span_tokens)) * uniform_att_dist_on_src # => shape = (batch_size)
+    # + an addition percentage of attention mass (hyperparam)
+    uniform_att_mass_on_src = input_lens.float().reciprocal() # => shape = (batch_size)
+    uniform_att_mass_on_span = num_in_span_tokens * uniform_att_mass_on_src # => shape = (batch_size)
+    expected_att_mass_on_span = uniform_att_mass_on_span * (1.0 + attention_mass)
 
-    # uniform_att_dist_on_spans = input_features.sum(dim=-1).float().reciprocal()
-    # uniform_att_mass_on_spans = uniform_att_dist_on_spans * output_lens * attention_mass
-
-    # loss is defined as the difference between the
-    # reference value (assumed to be a uniform distribution
-    # of the total attention mass over the source sequence +
-    # an expected attention mass provided as hyperparamter) 
+    # compute the difference between the reference value 
     # and the average attention mass on tokens in alignment spans
-    loss_per_item = (expected_att_mass_on_spans + attention_mass) - avg_attention_mass_on_spans
+    loss_per_item = expected_att_mass_on_span - avg_attention_mass_on_spans
     
     # zero-out negative loss values (i.e. where avg
     # attention is already > expected uniform values)
@@ -112,8 +108,8 @@ def alignment_attention_loss(
 
     # compute the ratio of aligned span tokens to
     # non-aligned span tokens in source text
-    scaling_factor = torch.Tensor([len(align_span_indices[i]) / input_lens[i].item() for i in range(bsz)]).to(cross_attentions.device)
-
+    # scaling_factor = torch.Tensor([len(align_span_indices[i]) / input_lens[i].item() for i in range(bsz)]).to(cross_attentions.device)
+    scaling_factor = num_in_span_tokens.true_divide(input_lens)
     # multiply by each item's individual loss by its
     # relevant scaling factor - items with no alignment
     # spans will be zero.
