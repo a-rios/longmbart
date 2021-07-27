@@ -57,13 +57,15 @@ def alignment_attention_loss(
         - loss is defined as the difference between the
         reference value of expected attention mass 
         (assumed to be a uniform distribution of the
-        total attention mass over the source sequence) 
+        total attention mass over the source sequence + the
+        portion of attention mass provided as a hyperparameter) 
         and the average attention mass on all aligned tokens
 
     params:
         attention_mass: hyperparameter for deciding how much
         of the total attention should be directed towards
-        aligned segments
+        aligned segments in addition to an underlying
+        uniformly distributed attention
         layer: cross attention encoder layer for which to
         compute loss
         head: attention head for which to compute loss
@@ -88,19 +90,21 @@ def alignment_attention_loss(
     # compute average by dividing by the true tgt lengths (no padding)
     avg_attention_mass_on_spans = total_attention_mass_on_spans / output_lens # => shape = (batch_size)
     
+    num_in_span_tokens = torch.LongTensor([i.size() for i in align_span_indices]).squeeze().to(cross_attentions.device)
     # reference values are the expected attention mass 
     # ocross all source tokens given a uniform distribution
     uniform_att_dist_on_src = input_lens.float().reciprocal() # => shape = (batch_size)
-    uniform_att_mass_on_src = uniform_att_dist_on_src * output_lens * attention_mass # => shape = (batch_size)
-    
+    expected_att_mass_on_spans = (output_lens.true_divide(num_in_span_tokens)) * uniform_att_dist_on_src # => shape = (batch_size)
+
     # uniform_att_dist_on_spans = input_features.sum(dim=-1).float().reciprocal()
     # uniform_att_mass_on_spans = uniform_att_dist_on_spans * output_lens * attention_mass
 
     # loss is defined as the difference between the
     # reference value (assumed to be a uniform distribution
-    # of the total attention mass over the source sequence) 
+    # of the total attention mass over the source sequence +
+    # an expected attention mass provided as hyperparamter) 
     # and the average attention mass on tokens in alignment spans
-    loss_per_item = uniform_att_mass_on_src - avg_attention_mass_on_spans
+    loss_per_item = (expected_att_mass_on_spans + attention_mass) - avg_attention_mass_on_spans
     
     # zero-out negative loss values (i.e. where avg
     # attention is already > expected uniform values)
@@ -345,9 +349,9 @@ class Simplifier(pl.LightningModule):
         lm_logits = outputs[0]
         
         # attentions are tuples of float tensors (one for each layer)
-
+        # breakpoint()
         att_loss = 0
-        if (outputs.cross_attentions is not None) and (input_features is not None):
+        if (outputs.cross_attentions is not None) and (input_features[0] is not None):
             input_lens = (input_ids != self.tokenizer.pad_token_id).sum(dim=-1)
             output_lens = (output_ids != self.tokenizer.pad_token_id).sum(dim=-1)
             att_loss = alignment_attention_loss(outputs.cross_attentions, input_features, input_lens, output_lens, attention_mass=self.args.att_loss_mass, layer=self.args.att_loss_layer, head=self.args.att_loss_head)
