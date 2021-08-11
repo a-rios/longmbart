@@ -32,6 +32,7 @@ def create_long_model(
 ):
     model = MBartForConditionalGeneration.from_pretrained(pretrained_model_name_or_path=base_model, cache_dir=cache_dir)
     tokenizer = MBartTokenizer.from_pretrained(tokenizer_name_or_path, model_max_length=max_pos, cache_dir=cache_dir)
+    tokenizer.save_vocabulary(cache_dir)
     config = MLongformerEncoderDecoderConfig.from_pretrained(base_model, cache_dir=cache_dir)
     model.config = config
 
@@ -240,6 +241,7 @@ def main():
     parser.add_argument(
         '--cache_dir',
         type=str,
+        required=True,
         help='where to save original model'
     )
     parser.add_argument(

@@ -1,6 +1,6 @@
 pytorch-lightning==1.1.6
 transformers @ git+https://github.com/ZurichNLP/transformers.git@longmbart#egg=transformers
-torch==1.6.0
+torch
 tensorboardX
 test-tube==0.7.5
 nltk==3.5
@@ -10,4 +10,4 @@ rouge_score
 requests
 sacrebleu
 datasets==1.2.1
-sentencepiece==0.1.95
+sentencepiece
