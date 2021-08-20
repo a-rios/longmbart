@@ -109,14 +109,14 @@ def alignment_attention_loss(
     # compute the ratio of aligned span tokens to
     # non-aligned span tokens in source text
     # scaling_factor = torch.Tensor([len(align_span_indices[i]) / input_lens[i].item() for i in range(bsz)]).to(cross_attentions.device)
-    scaling_factor = num_in_span_tokens.true_divide(input_lens)
+    # scaling_factor = num_in_span_tokens.true_divide(input_lens)
     # multiply by each item's individual loss by its
     # relevant scaling factor - items with no alignment
     # spans will be zero.
-    loss_per_item_scaled = loss_per_item * scaling_factor
-    total_loss_scaled = nansum(loss_per_item_scaled)
-
-    return total_loss_scaled.item()
+    # loss_per_item_scaled = loss_per_item * scaling_factor
+    
+    total_loss = nansum(loss_per_item)
+    return total_loss.item()
 
 def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=-100):
     """From fairseq"""
