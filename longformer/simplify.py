@@ -69,8 +69,7 @@ class SimplificationDatasetForInference(Dataset):
             sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], src_lang=self.src_lang, tgt_lang=self.tgt_lang , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt") # TODO move this to _get_dataloader, preprocess everything at once?
 
         input_ids = sample['input_ids'].squeeze()
-        if self.tags_included: # move language tag to the end of the sequence in source
-            input_ids = torch.cat([input_ids[1:], input_ids[:1]])
+        input_ids = torch.cat([input_ids[1:], input_ids[:1]]) # move language tag to the end of the sequence in source
         return input_ids, reference, target_tags
 
     @staticmethod
@@ -121,7 +120,7 @@ class InferenceSimplifier(pl.LightningModule):
             bad_words_ids = None
 
         if self.tags_included:
-            assert (ref[0] is not None or tags[0] is not None), "Need either reference with target labels or list of target labels with --tags-included (multilingual batches)"
+            assert (ref[0] is not None or tags[0] is not None), "Need either reference with target labels or list of target labels with --tags_included (multilingual batches)"
             if  ref[0] is not None:
                 tgt_ids = [self.tokenizer.lang_code_to_id[sample.split(' ')[0]]  for sample in ref ] # first token
             elif tags[0] is not None:

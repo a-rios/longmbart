@@ -83,6 +83,7 @@ def prepare_input(input_ids, model, attention_mode, pad_token_id, global_attenti
 def get_eval_scores(ref, generated_strs, tags_included=False, vloss=None):
         if vloss is None:
             vloss = torch.zeros(len(ref))
+        gold_strs = ref
         if tags_included:
             # remove tags from target text
             # print(gold_strs)
