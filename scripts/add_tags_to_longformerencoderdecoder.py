@@ -29,10 +29,15 @@ def main():
         '--initialize_tags',
         type=str, nargs='+',
         help='Initialize new language tags with embeddings of these tags.'
-    )                    
+    )
+    parser.add_argument(
+        '--fix_added_token_ids',
+        action='store_true',
+        help='EXPERIMENTAL: set this flag to avoid non-consecutive added tokens'
+    )
     parser.add_argument("--verbose",
                         type=int, default=1, help="Levels of verbosity affect what is tested/shown after converting model")
-                        
+
     args = parser.parse_args()
 
     if not os.path.exists(args.model_dir):
@@ -74,6 +79,24 @@ def main():
         model.model.shared.weight.data = embed_weight
         model.config.vocab_size = embed_weight.shape[0]
 
+        if args.fix_added_token_ids:
+            # Avoid AssertionError: Non-consecutive added token 'TOKEN'
+            # found. Should have index 20031 but has index 20032 in saved
+            # vocabulary.
+            print("fixing added token ids:")
+            added_tokens = tokenizer.added_tokens_encoder
+            print("before ", added_tokens)
+            sorted_tokens = sorted(
+                [(token, old_id) for token, old_id in added_tokens.items()], key=lambda x: x[1]
+            )
+            tokenizer.added_tokens_encoder = {
+                token: new_id for new_id, (token, _) in zip(
+                    range(sorted_tokens[0][1], sorted_tokens[0][1]+len(sorted_tokens)),
+                    sorted_tokens,
+                )
+            }
+            print("after ", tokenizer.added_tokens_encoder)
+
         print("saving tokenizer with new tags")
         tokenizer.save_pretrained(args.model_dir)
         print("saving model with new tags")
@@ -83,6 +106,7 @@ def main():
     print("id-to-lang-code ",tokenizer.id_to_lang_code)
     print("lang-code-to-id", tokenizer.lang_code_to_id)
 
+    tokenizer = MBartTokenizer.from_pretrained(args.model_dir)
     ## check embeddings
     if args.add_language_tags is not None and args.initialize_tags is not None:
         for new_tag, init_tag in zip(args.add_language_tags, args.initialize_tags):
