@@ -35,6 +35,7 @@ def main():
         action='store_true',
         help='EXPERIMENTAL: set this flag to avoid non-consecutive added tokens'
     )
+    parser.add_argument("--overwrite", action="store_true", help="EXPERIMENTAL: set this flag to overwrite the embeddings of existing tags instead of adding new ones.")
     parser.add_argument("--verbose",
                         type=int, default=1, help="Levels of verbosity affect what is tested/shown after converting model")
 
@@ -64,13 +65,33 @@ def main():
         tokenizer.add_tokens(args.add_language_tags)
         print("tokenizer len ", tokenizer.vocab_size)
 
+        # check that tags are already present when overwriting embeddings
+        # raises KeyError if this is not the case
+        if args.overwrite:
+            for new_tag in args.add_language_tags:
+                _ = tokenizer.lang_code_to_id[new_tag]
+
         for (new_tag, init_tag) in zip(args.add_language_tags, args.initialize_tags):
             init_tag_id = tokenizer.lang_code_to_id[init_tag]
+            new_tag_id = tokenizer.lang_code_to_id[new_tag] if args.overwrite else None
+            print(init_tag)
             print("init_tag_id ", init_tag_id)
+            print(new_tag)
+            print("new_tag_id ", new_tag_id)
             init_embed = model.model.shared.weight[init_tag_id].unsqueeze(0)
-            embed_weight = torch.cat((embed_weight, init_embed), dim=0)
+            if not args.overwrite:
+                embed_weight = torch.cat((embed_weight, init_embed), dim=0)
+            else:
+                with torch.no_grad():
+                    print(embed_weight[new_tag_id])
+                    embed_weight[new_tag_id] = init_embed
+                    print(embed_weight[new_tag_id])
             init_bias = final_logits_bias[init_tag_id].unsqueeze(dim=0)
-            final_logits_bias = torch.cat((final_logits_bias, init_bias), dim=0)
+            if not args.overwrite:
+                final_logits_bias = torch.cat((final_logits_bias, init_bias), dim=0)
+            else:
+                with torch.no_grad():
+                    final_logits_bias[new_tag_id] = init_bias
             print("added ", new_tag)
             print("tag embedding shape ", init_embed.shape)
             print("embedding matrix shape ", embed_weight.shape)
