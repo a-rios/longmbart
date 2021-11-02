@@ -36,6 +36,7 @@ def main():
         help='EXPERIMENTAL: set this flag to avoid non-consecutive added tokens'
     )
     parser.add_argument("--overwrite", action="store_true", help="EXPERIMENTAL: set this flag to overwrite the embeddings of existing tags instead of adding new ones.")
+    parser.add_argument("--checkpoint", nargs="+", default=[], type=str, help="EXPERIMENTAL: checkpoints to add tags to")
     parser.add_argument("--verbose",
                         type=int, default=1, help="Levels of verbosity affect what is tested/shown after converting model")
 
@@ -51,6 +52,8 @@ def main():
     tokenizer = MBartTokenizer.from_pretrained(args.model_dir)
     model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.model_dir)
     print("loaded tokenizer with len ", len(tokenizer.sp_model))
+    checkpoints = [(path, torch.load(path)) for path in args.checkpoint]
+    print("adding tag to checkpoints: ", [name for name, _ in checkpoints])
 
     if args.add_language_tags is not None:
         embed_weight = model.model.shared.weight # (vocab, dim)
@@ -59,6 +62,14 @@ def main():
         final_logits_bias = model.final_logits_bias.transpose(0,1) # (1, vocab_size)
         #print("new model, logits bias ", final_logits_bias)
         #print("new model, logits bias non zero", final_logits_bias.nonzero())
+        checkpoint_embed_weights = [
+            checkpoint["state_dict"]["model.model.shared.weight"]
+            for _, checkpoint in checkpoints
+        ]
+        checkpoint_final_logits_biases = [
+            checkpoint["state_dict"]["model.final_logits_bias"]
+            for _, checkpoint in checkpoints
+        ]
 
         print(tokenizer._additional_special_tokens)
         print("tokenizer orig len ", tokenizer.vocab_size)
@@ -81,17 +92,25 @@ def main():
             init_embed = model.model.shared.weight[init_tag_id].unsqueeze(0)
             if not args.overwrite:
                 embed_weight = torch.cat((embed_weight, init_embed), dim=0)
+                for i, c_embed_weight in enumerate(checkpoint_embed_weights):
+                    checkpoint_embed_weights[i] = torch.cat((c_embed_weight, init_embed), dim=0)
             else:
                 with torch.no_grad():
                     print(embed_weight[new_tag_id])
                     embed_weight[new_tag_id] = init_embed
+                    for i in len(checkpoint_embed_weights):
+                        checkpoint_embed_weights[i][new_tag_id] = init_embed
                     print(embed_weight[new_tag_id])
             init_bias = final_logits_bias[init_tag_id].unsqueeze(dim=0)
             if not args.overwrite:
                 final_logits_bias = torch.cat((final_logits_bias, init_bias), dim=0)
+                for i, c_final_logits_bias in enumerate(checkpoint_final_logits_biases):
+                    checkpoint_final_logits_biases[i] = torch.cat((c_final_logits_bias, init_bias), dim=0)
             else:
                 with torch.no_grad():
                     final_logits_bias[new_tag_id] = init_bias
+                    for i in len(checkpoint_final_logits_biases):
+                        checkpoint_final_logits_biases[i][new_tag_id] = init_bias
             print("added ", new_tag)
             print("tag embedding shape ", init_embed.shape)
             print("embedding matrix shape ", embed_weight.shape)
@@ -99,6 +118,13 @@ def main():
         model.final_logits_bias.data = final_logits_bias.transpose(0,1)
         model.model.shared.weight.data = embed_weight
         model.config.vocab_size = embed_weight.shape[0]
+
+        for (path, checkpoint), checkpoint_embed_weight, checkpoint_final_logits_bias in zip(
+            checkpoints, checkpoint_embed_weights, checkpoint_final_logits_biases
+        ):
+            checkpoint["state_dict"]["model.model.shared.weight"] = checkpoint_embed_weight
+            checkpoint["state_dict"]["model.model.encoder.embed_tokens.weight"] = checkpoint_embed_weight
+            checkpoint["state_dict"]["model.final_logits_bias"] = checkpoint_final_logits_bias
 
         if args.fix_added_token_ids:
             # Avoid AssertionError: Non-consecutive added token 'TOKEN'
@@ -122,6 +148,9 @@ def main():
         tokenizer.save_pretrained(args.model_dir)
         print("saving model with new tags")
         model.save_pretrained(args.model_dir)
+        print("saving checkpoints")
+        for path, checkpoint in checkpoints:
+            torch.save(checkpoint, path)
 
     print("special tokens map ", tokenizer.special_tokens_map)
     print("id-to-lang-code ",tokenizer.id_to_lang_code)
