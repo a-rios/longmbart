@@ -52,13 +52,13 @@ def main():
     tokenizer = MBartTokenizer.from_pretrained(args.model_dir)
     model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.model_dir)
     print("loaded tokenizer with len ", len(tokenizer.sp_model))
-    checkpoints = [(path, torch.load(path)) for path in args.checkpoint]
+    checkpoints = [(path, torch.load(path, map_location=torch.device('cpu'))) for path in args.checkpoint]
     print("adding tag to checkpoints: ", [name for name, _ in checkpoints])
 
     if args.add_language_tags is not None:
         embed_weight = model.model.shared.weight # (vocab, dim)
         print(embed_weight.shape)
-        ## need to reduce final_logits_bias too
+        # need to reduce final_logits_bias too
         final_logits_bias = model.final_logits_bias.transpose(0,1) # (1, vocab_size)
         #print("new model, logits bias ", final_logits_bias)
         #print("new model, logits bias non zero", final_logits_bias.nonzero())
@@ -67,7 +67,7 @@ def main():
             for _, checkpoint in checkpoints
         ]
         checkpoint_final_logits_biases = [
-            checkpoint["state_dict"]["model.final_logits_bias"]
+            checkpoint["state_dict"]["model.final_logits_bias"].transpose(0,1)
             for _, checkpoint in checkpoints
         ]
 
@@ -90,27 +90,35 @@ def main():
             print(new_tag)
             print("new_tag_id ", new_tag_id)
             init_embed = model.model.shared.weight[init_tag_id].unsqueeze(0)
+            checkpoint_init_embeds = [
+                checkpoint["state_dict"]["model.model.shared.weight"][init_tag_id].unsqueeze(0)
+                for _, checkpoint in checkpoints
+            ]
             if not args.overwrite:
                 embed_weight = torch.cat((embed_weight, init_embed), dim=0)
                 for i, c_embed_weight in enumerate(checkpoint_embed_weights):
-                    checkpoint_embed_weights[i] = torch.cat((c_embed_weight, init_embed), dim=0)
+                    checkpoint_embed_weights[i] = torch.cat((c_embed_weight, checkpoint_init_embeds[i]), dim=0)
             else:
                 with torch.no_grad():
                     print(embed_weight[new_tag_id])
                     embed_weight[new_tag_id] = init_embed
-                    for i in len(checkpoint_embed_weights):
-                        checkpoint_embed_weights[i][new_tag_id] = init_embed
+                    for i in range(len(checkpoint_embed_weights)):
+                        checkpoint_embed_weights[i][new_tag_id] = checkpoint_init_embeds[i]
                     print(embed_weight[new_tag_id])
             init_bias = final_logits_bias[init_tag_id].unsqueeze(dim=0)
+            checkpoint_init_biases = [
+                checkpoint["state_dict"]["model.final_logits_bias"].transpose(0,1)[init_tag_id].unsqueeze(dim=0)
+                for _, checkpoint in checkpoints
+            ]
             if not args.overwrite:
                 final_logits_bias = torch.cat((final_logits_bias, init_bias), dim=0)
                 for i, c_final_logits_bias in enumerate(checkpoint_final_logits_biases):
-                    checkpoint_final_logits_biases[i] = torch.cat((c_final_logits_bias, init_bias), dim=0)
+                    checkpoint_final_logits_biases[i] = torch.cat((c_final_logits_bias, checkpoint_init_biases[i]), dim=0)
             else:
                 with torch.no_grad():
                     final_logits_bias[new_tag_id] = init_bias
-                    for i in len(checkpoint_final_logits_biases):
-                        checkpoint_final_logits_biases[i][new_tag_id] = init_bias
+                    for i in range(len(checkpoint_final_logits_biases)):
+                        checkpoint_final_logits_biases[i][new_tag_id] = checkpoint_init_biases[i]
             print("added ", new_tag)
             print("tag embedding shape ", init_embed.shape)
             print("embedding matrix shape ", embed_weight.shape)
@@ -123,8 +131,10 @@ def main():
             checkpoints, checkpoint_embed_weights, checkpoint_final_logits_biases
         ):
             checkpoint["state_dict"]["model.model.shared.weight"] = checkpoint_embed_weight
+            checkpoint["state_dict"]["model.lm_head.weight"] = checkpoint_embed_weight
             checkpoint["state_dict"]["model.model.encoder.embed_tokens.weight"] = checkpoint_embed_weight
-            checkpoint["state_dict"]["model.final_logits_bias"] = checkpoint_final_logits_bias
+            checkpoint["state_dict"]["model.model.decoder.embed_tokens.weight"] = checkpoint_embed_weight
+            checkpoint["state_dict"]["model.final_logits_bias"] = checkpoint_final_logits_bias.transpose(0,1)
 
         if args.fix_added_token_ids:
             # Avoid AssertionError: Non-consecutive added token 'TOKEN'
@@ -157,7 +167,7 @@ def main():
     print("lang-code-to-id", tokenizer.lang_code_to_id)
 
     tokenizer = MBartTokenizer.from_pretrained(args.model_dir)
-    ## check embeddings
+    # check embeddings
     if args.add_language_tags is not None and args.initialize_tags is not None:
         for new_tag, init_tag in zip(args.add_language_tags, args.initialize_tags):
             print("original language embedding for {}: {}".format(init_tag, model.model.shared.weight[tokenizer.convert_tokens_to_ids(init_tag)]))
