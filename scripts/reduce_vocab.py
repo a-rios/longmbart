@@ -11,6 +11,7 @@ from transformers import MBartTokenizer
 from transformers import MBartForConditionalGeneration, MBartConfig
 from transformers.models.mbart.modeling_mbart import shift_tokens_right
 import torch
+from tqdm import tqdm
 
 
 logger = logging.getLogger(__name__)
@@ -110,7 +111,7 @@ def create_model(
 
             # check ids in reduced spm model
             removed =0
-            for i in indices_to_remove:
+            for i in tqdm(indices_to_remove):
                 position = i-removed
                 #print("deleting ", pb2_model.pieces[position].piece)
                 del pb2_model.pieces[position]
@@ -178,6 +179,17 @@ def main():
     parser.add_argument("--print-params",
                         action='store_true',
                         help="Print parameter names and shapes.")
+
+    parser.add_argument(
+        '--add_language_tags',
+        type=str, nargs='+',
+        help='List of additional language tags (will replace tags given with --replace_tags and initialize with embeddings given with --initialize_tags).'
+    )
+    parser.add_argument(
+        '--initialize_tags',
+        type=str, nargs='+',
+        help='Initialize new language tags with embeddings of these tags.'
+    )
                     
     parser.add_argument("--verbose",
                         type=int, default=1, help="Levels of verbosity affect what is tested/shown after converting model")
@@ -186,6 +198,10 @@ def main():
 
     if not os.path.exists(args.save_model_to):
         os.mkdir(args.save_model_to)
+
+    if args.add_language_tags is not None:
+        assert args.initialize_tags is not None, "Need --initialize_tags to add new language tags"
+        assert len(args.add_language_tags) == len(args.initialize_tags), "Need same number of values for --add_language_tags and --initialize_tags but got %i and %i" %(len(args.add_language_tags), len(args.initialize_tags))
 
 
     create_model(
@@ -196,25 +212,66 @@ def main():
         reduce_to_vocab=args.reduce_to_vocab,
         print_params=args.print_params
     )
-    tokenizer = MBartTokenizer.from_pretrained(args.save_model_to)
 
+    tokenizer = MBartTokenizer.from_pretrained(args.save_model_to)
     model = MBartForConditionalGeneration.from_pretrained(args.save_model_to)
     print("loaded tokenizer with len ", len(tokenizer.sp_model))
 
+    if args.add_language_tags is not None:
+        embed_weight = model.model.shared.weight # (vocab, dim)
+        print(embed_weight.shape)
+        ## need to reduce final_logits_bias too
+        final_logits_bias = model.final_logits_bias.transpose(0,1) # (1, vocab_size)
+        #print("new model, logits bias ", final_logits_bias)
+        #print("new model, logits bias non zero", final_logits_bias.nonzero())
+
+        print(tokenizer._additional_special_tokens)
+        print("tokenizer orig len ", tokenizer.vocab_size)
+        tokenizer.add_tokens(args.add_language_tags)
+        print("tokenizer len ", tokenizer.vocab_size)
+
+        for (new_tag, init_tag) in zip(args.add_language_tags, args.initialize_tags):
+            init_tag_id = tokenizer.lang_code_to_id[init_tag]
+            print("init_tag_id ", init_tag_id)
+            init_embed = model.model.shared.weight[init_tag_id].unsqueeze(0)
+            embed_weight = torch.cat((embed_weight, init_embed), dim=0)
+            init_bias = final_logits_bias[init_tag_id].unsqueeze(dim=0)
+            final_logits_bias = torch.cat((final_logits_bias, init_bias), dim=0)
+            print("added ", new_tag)
+            print("tag embedding shape ", init_embed.shape)
+            print("embedding matrix shape ", embed_weight.shape)
+
+        model.final_logits_bias.data = final_logits_bias.transpose(0,1)
+        model.model.shared.weight.data = embed_weight
+        model.config.vocab_size = embed_weight.shape[0]
+
+        print("saving tokenizer with new tags")
+        tokenizer.save_pretrained(args.save_model_to)
+        print("saving model with new tags")
+        model.save_pretrained(args.save_model_to)
+
+    #reload tokenizer with extended tags
     tokenizer = MBartTokenizer.from_pretrained(args.save_model_to)
+    print("special tokens map ", tokenizer.special_tokens_map)
+    print("id-to-lang-code ",tokenizer.id_to_lang_code)
+    print("lang-code-to-id", tokenizer.lang_code_to_id)
+
+    ## check embeddings
+    if args.add_language_tags is not None and args.initialize_tags is not None:
+        for new_tag, init_tag in zip(args.add_language_tags, args.initialize_tags):
+            print("original language embedding for {}: {}".format(init_tag, model.model.shared.weight[tokenizer.convert_tokens_to_ids(init_tag)]))
+            print("initialized {} with embedding: {}".format(new_tag, model.model.shared.weight[tokenizer.convert_tokens_to_ids(new_tag)]))
+
+
     TXT = "de_DE Das ist ein Test."
     TXT2 = "de_DE Noch ein Test."
 
     batch: dict = tokenizer.prepare_seq2seq_batch(src_texts=[TXT, TXT2], max_length=1024, truncation=False, padding="max_length", return_tensors="pt", tags_included=True)
     print(batch)
-    translated_tokens = model.generate(**batch, decoder_start_token_ids=tokenizer.lang_code_to_id["de_DE"], use_cache=True, num_beams=2)
+    translated_tokens = model.generate(**batch, decoder_start_token_id=tokenizer.lang_code_to_id["de_A1"], use_cache=True, num_beams=2)
     translation = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
     print(translation)
 
-    batch: dict = tokenizer.prepare_seq2seq_batch(src_texts=[TXT, TXT2], src_lang="de_DE", max_length=2048, truncation=False, padding="max_length", return_tensors="pt",  tags_included=True)
-    translated_tokens = model.generate(**batch, decoder_start_token_id=tokenizer.lang_code_to_id["es_XX"], use_cache=True, num_beams=2, max_length=20)
-    translation = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
-    print(translation)
 
 if __name__ == "__main__":
     main()
