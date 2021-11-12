@@ -252,7 +252,7 @@ class Simplifier(pl.LightningModule):
         
         gold_str = self.tokenizer.batch_decode(output_ids.tolist(), skip_special_tokens=True, clean_up_tokenization_spaces=True)
         # get scores as dict
-        scores = get_eval_scores(gold_str, generated_str, self.tags_included, vloss)
+        scores = get_eval_scores(gold_str, generated_str, False, vloss)
         
         outfile = self.args.save_dir + "/" + args.save_prefix + "/_val_out_checkpoint_" + str(self.current_checkpoint)
 
