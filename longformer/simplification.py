@@ -333,14 +333,21 @@ class Simplifier(pl.LightningModule):
         decoder_input_ids = decoder_input_ids[:, :-1] # without eos/last pad
         decoder_attention_mask = (decoder_input_ids != self.tokenizer.pad_token_id)
 
+        # breakpoint()
         # NOTE: --grad_ckpt must be False to get output_attentions
+        
+        padded_input_features = None
+        if args.factor_features:
+            padded_input_features = torch.nn.functional.pad(input_features, (self.args.max_input_len-input_features.size()[-1], 0), mode='constant')
+    
         outputs = self.model(
                 input_ids,
                 attention_mask=attention_mask,
                 decoder_input_ids=decoder_input_ids,
                 decoder_attention_mask=decoder_attention_mask,
                 use_cache=False,
-                output_attentions=True)
+                output_attentions=True,
+                input_features=padded_input_features)
 
         lm_logits = outputs[0]
         
@@ -597,7 +604,7 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--att_loss_head", type=int, default=2, help="Attention head for wich attention on aligned spans is computed and incorporated into custom loss function. Note, parameter is zero-indexed (i.e. possible values [0-15]")
         parser.add_argument("--att_loss_layer", type=int, default=-1, help="Layer for wich attention on aligned spans is computed and incorporated into custom loss function (default = last layer (i.e. -1))")
         
-        
+        parser.add_argument("--factor_features", action='store_true', help="If specified, src features provided are combined with token embeddings (currently binary features are simply added to input embeddings, the features themselved are not embedded (cf. Sennrich and Haddow 2016))")
         
 
         return parser
