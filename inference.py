@@ -64,7 +64,7 @@ class SimplificationDatasetForInference(Dataset):
             reference = self.reference[idx]['text']
         if self.target_tags is not None:
             target_tags = self.target_tags[idx]['text']
-        if self.tags_included is not None:
+        if self.tags_included:
             sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], tags_included=True , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt")
         else:
             sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], src_lang=self.src_lang, tgt_lang=self.tgt_lang , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt") # TODO move this to _get_dataloader, preprocess everything at once?
