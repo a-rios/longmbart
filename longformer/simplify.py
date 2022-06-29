@@ -366,13 +366,24 @@ def main(args):
         version=0  # always use version=0
     )
 
-    trainer = pl.Trainer(gpus=args.gpus, distributed_backend='ddp' if torch.cuda.is_available() else None,
-                         replace_sampler_ddp=False,
-                         limit_test_batches=args.test_percent_check,
-                         logger=logger,
-                         progress_bar_refresh_rate=args.progress_bar_refresh_rate,
-                         precision=32 if args.fp32 else 16, amp_level='O2'
-                         )
+    if torch.cuda.is_available and args.gpus > 0:
+        trainer = pl.Trainer(
+            gpus=args.gpus,
+            distributed_backend='ddp' if torch.cuda.is_available() else None,
+            replace_sampler_ddp=False,
+            limit_test_batches=args.test_percent_check,
+            logger=logger,
+            progress_bar_refresh_rate=args.progress_bar_refresh_rate,
+            precision=32 if args.fp32 else 16, amp_level='O2'
+        )
+    else:
+        trainer = pl.Trainer(
+            gpus=args.gpus,
+            replace_sampler_ddp=False,
+            limit_test_batches=args.test_percent_check,
+            logger=logger,
+            progress_bar_refresh_rate=args.progress_bar_refresh_rate,
+        )
     
     trainer.test(simplifier)
     
