@@ -328,7 +328,10 @@ def main(args):
     checkpoint_path=os.path.join(args.model_path, args.checkpoint_name)
     simplifier = InferenceSimplifier(args)
     
-    cp = torch.load(checkpoint_path)
+    if torch.cuda.is_available and args.gpus > 0:
+        cp = torch.load(checkpoint_path)
+    else:
+        cp = torch.load(checkpoint_path, map_location=torch.device("cpu"))
     simplifier.model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.model_path)
    
     simplifier.load_state_dict(cp["state_dict"])
