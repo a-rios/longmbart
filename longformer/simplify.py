@@ -327,7 +327,10 @@ def main(args):
     checkpoint_path=os.path.join(args.model_path, args.checkpoint_name)
     simplifier = InferenceSimplifier(args)
     
-    cp = torch.load(checkpoint_path)
+    if torch.cuda.is_available and args.gpus > 0:
+        cp = torch.load(checkpoint_path)
+    else:
+        cp = torch.load(checkpoint_path, map_location=torch.device("cpu"))
     simplifier.model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.model_path)
    
     simplifier.load_state_dict(cp["state_dict"])
@@ -365,13 +368,24 @@ def main(args):
         version=0  # always use version=0
     )
 
-    trainer = pl.Trainer(gpus=args.gpus, distributed_backend='ddp' if torch.cuda.is_available() else None,
-                         replace_sampler_ddp=False,
-                         limit_test_batches=args.test_percent_check,
-                         logger=logger,
-                         progress_bar_refresh_rate=args.progress_bar_refresh_rate,
-                         precision=32 if args.fp32 else 16, amp_level='O2'
-                         )
+    if torch.cuda.is_available and args.gpus > 0:
+        trainer = pl.Trainer(
+            gpus=args.gpus,
+            distributed_backend='ddp' if torch.cuda.is_available() else None,
+            replace_sampler_ddp=False,
+            limit_test_batches=args.test_percent_check,
+            logger=logger,
+            progress_bar_refresh_rate=args.progress_bar_refresh_rate,
+            precision=32 if args.fp32 else 16, amp_level='O2'
+        )
+    else:
+        trainer = pl.Trainer(
+            gpus=args.gpus,
+            replace_sampler_ddp=False,
+            limit_test_batches=args.test_percent_check,
+            logger=logger,
+            progress_bar_refresh_rate=args.progress_bar_refresh_rate,
+        )
     
     trainer.test(simplifier)
     
