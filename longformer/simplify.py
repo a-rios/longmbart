@@ -26,7 +26,6 @@ from longformer.sliding_chunks import pad_to_window_size
 import logging
 from transformers import MBartTokenizer
 from transformers import MBartForConditionalGeneration
-from transformers.models.mbart.modeling_mbart import shift_tokens_right
 from longformer.longformer_encoder_decoder import LongformerSelfAttentionForBart
 from longformer.longformer_encoder_decoder_mbart import MLongformerEncoderDecoderForConditionalGeneration, MLongformerEncoderDecoderConfig
 import datasets
@@ -69,7 +68,7 @@ class SimplificationDatasetForInference(Dataset):
             sample = self.tokenizer.prepare_seq2seq_batch(src_texts=[source], src_lang=self.src_lang, tgt_lang=self.tgt_lang , max_length=self.max_input_len, max_target_length=self.max_output_len, truncation=True, padding=False, return_tensors="pt") # TODO move this to _get_dataloader, preprocess everything at once?
 
         input_ids = sample['input_ids'].squeeze()
-        input_ids = torch.cat([input_ids[1:], input_ids[:1]]) # move language tag to the end of the sequence in source
+        input_ids = torch.roll(input_ids, shifts=-1) # move language tag to the end of the sequence in source
         return input_ids, reference, target_tags
 
     @staticmethod

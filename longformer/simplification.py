@@ -24,7 +24,6 @@ from longformer.sliding_chunks import pad_to_window_size
 import logging
 from transformers import MBartTokenizer
 from transformers import MBartForConditionalGeneration
-from transformers.models.mbart.modeling_mbart import shift_tokens_right
 from longformer.longformer_encoder_decoder import LongformerSelfAttentionForBart
 from longformer.longformer_encoder_decoder_mbart import MLongformerEncoderDecoderForConditionalGeneration, MLongformerEncoderDecoderConfig
 import datasets
@@ -80,15 +79,12 @@ def prepare_input(input_ids, model, attention_mode, pad_token_id, global_attenti
                 input_ids, attention_mask, half_padding_mod, pad_token_id)
         return input_ids, attention_mask
 
-def get_eval_scores(ref, generated_strs, tags_included=False, vloss=None):
+def get_eval_scores(gold_strs, generated_strs, remove_trg_tag=False, vloss=None):
         if vloss is None:
-            vloss = torch.zeros(len(ref))
-        gold_strs = ref
-        if tags_included:
-            # remove tags from target text
-            # print(gold_strs)
+            vloss = torch.zeros(len(gold_strs))
+        if remove_trg_tag:
+            # remove tags from target text (only need in inference where gold_strs comes directly from text)
             gold_strs = [' '.join(r.split(' ')[1:]) for r in ref]
-            # print(gold_strs)  ## TODO fix
         scorer = rouge_scorer.RougeScorer(rouge_types=['rouge1', 'rouge2', 'rougeL', 'rougeLsum'], use_stemmer=False)
         rouge1 = rouge2 = rougel = rougelsum = 0.0
         for ref, pred in zip(gold_strs, generated_strs):
@@ -137,20 +133,44 @@ class SimplificationDataset(Dataset):
 
         input_ids = sample['input_ids'].squeeze()
         output_ids = sample['labels'].squeeze()
-        if self.tags_included: # move language tag to the end of the sequence in source, also in target (so we can use mbarts shift_tokens_right that takes padding into account)
-            input_ids = torch.cat([input_ids[1:], input_ids[:1]])
-            output_ids = torch.cat([output_ids[1:], output_ids[:1]])
-        return input_ids, output_ids
+
+
+        # NOTE: can't use shift_tokens_right from modeling_mbart with batch_sizes > 1, does not take padding into account. prepare sequences here, without padding
+        # this is what sequences need to look like as input to the mbart model:
+        # input_ids: tokens, eos, lang_id
+        # decoder_input: lang_id tokens
+        # labels = tokens eos
+        if self.tags_included:
+            # if tags_included:
+            # inputs ids after prepare_seq2seq_batch: <lang_id tokens eos>, output_ids: <lang_id tokens eos>
+            # input: <lang_id tokens eos> --> <tokens eos lang_id>
+            # labels: <lang_id tokens eos> --> <tokens eos>
+            # decoder_input_ids: <lang_id tokens>
+            input_ids = torch.roll(input_ids, shifts=-1) # move lang_id from start to end
+            labels = output_ids[1:] # cut off lang_id at start
+            decoder_input_ids = output_ids[:-1] # cut off eos at end
+        else:
+            # with src_lang, tgt_lang:
+            # inputs ids after prepare_seq2seq_batch: <tokens eos lang_id>, output_ids: <tokens eos lang_id>
+            # input:  <tokens eos lang_id> --> no change
+            # labels: <tokens eos lang_id> --> <tokens eos>
+            # decoder input ids: <tokens eos lang_id> --> <lang_id tokens>
+            labels = output_ids[:-1] # cut off lang_id at the end
+            decoder_input_ids = torch.roll(output_ids, shifts=1) # shift lang_id from last to first position
+            decoder_input_ids = decoder_input_ids[:-1] # cut off eos
+
+        return input_ids, decoder_input_ids, labels
 
     @staticmethod
     def collate_fn(batch):
         
         pad_token_id = 1
     
-        input_ids, output_ids = list(zip(*batch))
+        input_ids, decoder_input_ids, labels = list(zip(*batch))
         input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=pad_token_id)
-        output_ids = torch.nn.utils.rnn.pad_sequence(output_ids, batch_first=True, padding_value=pad_token_id)
-        return input_ids, output_ids
+        labels = torch.nn.utils.rnn.pad_sequence(labels, batch_first=True, padding_value=pad_token_id)
+        decoder_input_ids = torch.nn.utils.rnn.pad_sequence(decoder_input_ids, batch_first=True, padding_value=pad_token_id)
+        return input_ids, decoder_input_ids, labels
 
 
 class Simplifier(pl.LightningModule):
@@ -190,11 +210,8 @@ class Simplifier(pl.LightningModule):
         self.config.attention_mode = self.args.attention_mode
         self.config.attention_window = [self.args.attention_window] * self.config.encoder_layers
 
-    def forward(self, input_ids, output_ids):
+    def forward(self, input_ids, decoder_input_ids, labels):
         input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id, self.args.global_attention_indices)
-        decoder_input_ids = shift_tokens_right(output_ids, self.config.pad_token_id) # (in: output_ids, eos_token_id, tgt_lang_id out: tgt_lang_id, output_ids, eos_token_id)
-        labels = decoder_input_ids[:, 1:].clone()
-        decoder_input_ids = decoder_input_ids[:, :-1] # without eos/last pad
         decoder_attention_mask = (decoder_input_ids != self.tokenizer.pad_token_id)
 
         outputs = self.model(
@@ -233,13 +250,11 @@ class Simplifier(pl.LightningModule):
 
         outputs = self.forward(*batch)
         vloss = outputs[0]
-        input_ids, output_ids = batch
+        input_ids, decoder_input_ids, labels = batch
         input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode, self.tokenizer.pad_token_id, self.args.global_attention_indices)
         if self.tags_included:
             # get list of target language tags
-            # output_ids (batch_size, seq_len), with padding
-            shifted = shift_tokens_right(output_ids, self.config.pad_token_id) # (in: output_ids, eos_token_id, tgt_lang_id out: tgt_lang_id, output_ids, eos_token_id)
-            decoder_start_token_ids = shifted.narrow(dim=1, start=0, length=1)
+            decoder_start_token_ids = decoder_input_ids.narrow(dim=1, start=0, length=1)
             generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
                                             use_cache=True, max_length=self.args.max_output_len,
                                             num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_ids=decoder_start_token_ids)
@@ -250,7 +265,7 @@ class Simplifier(pl.LightningModule):
 
         generated_str = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=True)
         
-        gold_str = self.tokenizer.batch_decode(output_ids.tolist(), skip_special_tokens=True, clean_up_tokenization_spaces=True)
+        gold_str = self.tokenizer.batch_decode(labels.tolist(), skip_special_tokens=True, clean_up_tokenization_spaces=True)
         # get scores as dict
         scores = get_eval_scores(gold_str, generated_str, False, vloss)
         
@@ -259,12 +274,12 @@ class Simplifier(pl.LightningModule):
         with open(outfile, 'a') as f:
             for sample in generated_str:
                 f.write(sample + "\n")
-        self.log('vloss', vloss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('bleu', scores['bleu'], on_step=False, on_epoch=True, prog_bar=True)
-        self.log('rouge1', scores['rouge1'], on_step=False, on_epoch=True, prog_bar=True)
-        self.log('rouge2', scores['rouge2'], on_step=False, on_epoch=True, prog_bar=True)
-        self.log('rougeL', scores['rougeL'], on_step=False, on_epoch=True, prog_bar=True)
-        self.log('rougeLsum', scores['rougeLsum'], on_step=False, on_epoch=True, prog_bar=True)
+        self.log('vloss', vloss, on_step=False, on_epoch=True, prog_bar=False)
+        self.log('bleu', scores['bleu'], on_step=False, on_epoch=True, prog_bar=False)
+        self.log('rouge1', scores['rouge1'], on_step=False, on_epoch=True, prog_bar=False)
+        self.log('rouge2', scores['rouge2'], on_step=False, on_epoch=True, prog_bar=False)
+        self.log('rougeL', scores['rougeL'], on_step=False, on_epoch=True, prog_bar=False)
+        self.log('rougeLsum', scores['rougeLsum'], on_step=False, on_epoch=True, prog_bar=False)
         
         return scores
 
@@ -282,7 +297,8 @@ class Simplifier(pl.LightningModule):
             metrics.append(metric)
         logs = dict(zip(*[names, metrics]))
         print("Evaluation on checkpoint [{}] ".format(self.current_checkpoint))
-        print(logs)
+        for m,v in logs.items():
+            print(f"{m}:{v}")
         
         ## save metric value + number of checkpoint if best
         if self.args.early_stopping_metric == 'vloss' and logs['vloss'] < self.best_metric:
