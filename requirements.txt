@@ -6,7 +6,7 @@ test-tube==0.7.5
 nltk==3.5
 numpy==1.19.5
 nlp
-rouge_score
+rouge_score==0.0.4
 requests
 sacrebleu
 datasets==1.2.1
