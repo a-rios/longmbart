@@ -84,7 +84,7 @@ def get_eval_scores(gold_strs, generated_strs, remove_trg_tag=False, vloss=None)
             vloss = torch.zeros(len(gold_strs))
         if remove_trg_tag:
             # remove tags from target text (only need in inference where gold_strs comes directly from text)
-            gold_strs = [' '.join(r.split(' ')[1:]) for r in ref]
+            gold_strs = [' '.join(r.split(' ')[1:]) for r in gold_strs]
         scorer = rouge_scorer.RougeScorer(rouge_types=['rouge1', 'rouge2', 'rougeL', 'rougeLsum'], use_stemmer=False)
         rouge1 = rouge2 = rougel = rougelsum = 0.0
         for ref, pred in zip(gold_strs, generated_strs):
