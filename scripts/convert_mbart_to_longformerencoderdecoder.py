@@ -259,6 +259,11 @@ def main():
         type=str, nargs='+',
         help='Initialize new language tags with embeddings of these tags.'
     )
+    parser.add_argument(
+        '--add_to_vocab',
+        type=str, nargs='+',
+        help='List of additional tokens to be added to the vocab.'
+    )
     parser.add_argument("--print-params",
                         action='store_true',
                         help="Print parameter names and shapes.")
@@ -318,6 +323,15 @@ def main():
         model.model.shared.weight.data = embed_weight
         model.config.vocab_size = embed_weight.shape[0]
 
+    if args.add_to_vocab is not None:
+        print("adding new tokens to vocab")
+        print("provided {} tokens".format(len(args.add_to_vocab)))
+        new_tokens = set(args.add_to_vocab) - set(tokenizer.get_vocab().keys())
+        print("number of tokens not yet part of vocab: {}".format(len(new_tokens)))
+        tokenizer.add_tokens(list(new_tokens))
+        model.resize_token_embeddings(len(tokenizer))
+
+    if args.add_language_tags is not None or args.add_to_vocab:
         print("saving tokenizer with new tags")
         tokenizer.save_pretrained(args.save_model_to)
         print("saving model with new tags")
