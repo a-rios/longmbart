@@ -93,7 +93,22 @@ class InferenceSimplifier(pl.LightningModule):
         
         self.config = MLongformerEncoderDecoderConfig.from_pretrained(self.args.model_path)
         self.tokenizer = MBartTokenizer.from_pretrained(self.args.tokenizer, use_fast=True)
-        
+        if args.remove_special_tokens_containing:
+            print("special tokens before:", self.tokenizer.special_tokens_map)
+            to_remove = set()
+            for contains_str in args.remove_special_tokens_containing:
+                to_remove = to_remove.union({
+                    token for token in self.tokenizer.additional_special_tokens
+                    if contains_str in token
+                })
+            print("removing special tokens:", to_remove)
+            self.tokenizer.additional_special_tokens = [
+                token for token in self.tokenizer.additional_special_tokens
+                if token not in to_remove
+            ]
+            self.tokenizer.special_tokens_map["additional_special_tokens"] = str(self.tokenizer.additional_special_tokens)
+            print("special tokens after:", self.tokenizer.special_tokens_map)
+
         self.max_input_len = self.args.max_input_len if self.args.max_input_len is not None else self.config.max_encoder_position_embeddings
         self.max_output_len = self.args.max_output_len if self.args.max_output_len is not None else self.config.max_decoder_position_embeddings 
         self.test_dataloader_object = None
@@ -283,6 +298,7 @@ class InferenceSimplifier(pl.LightningModule):
         parser.add_argument("--max_output_len", type=int, default=512, help="maximum num of wordpieces, if unspecified, will use number of decoder positions from model config.")
         parser.add_argument("--bad_words", type=str, default=None, help="Path to file containing bad words.")
         parser.add_argument("--used_bad_words", type=str, default=None, help="Path to file where used bad words should be saved.")
+        parser.add_argument("--remove_special_tokens_containing", type=str, nargs="+", help="Remove tokens from the special_tokens_map that contain this string")
         # TODO
         # parser.add_argument("--do_predict", action="store_true", default=False, help="If given, predictions are run using the `predict_step()` method rather than `test_step()`. Outputs are written to the specified output file without being evaluated!")
         
