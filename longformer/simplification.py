@@ -79,6 +79,20 @@ def prepare_input(input_ids, model, attention_mode, pad_token_id, global_attenti
                 input_ids, attention_mask, half_padding_mod, pad_token_id)
         return input_ids, attention_mask
 
+def remove_special_tokens(tokenizer, special_token_substrings):
+    to_remove = set()
+    for contains_str in special_token_substrings:
+        to_remove = to_remove.union({
+            token for token in tokenizer.additional_special_tokens
+            if contains_str in token
+        })
+    tokenizer.additional_special_tokens = [
+        token for token in tokenizer.additional_special_tokens
+        if token not in to_remove
+    ]
+    tokenizer.special_tokens_map["additional_special_tokens"] = str(tokenizer.additional_special_tokens)
+    return tokenizer
+
 def get_eval_scores(gold_strs, generated_strs, remove_trg_tag=False, vloss=None):
         if vloss is None:
             vloss = torch.zeros(len(gold_strs))
@@ -384,6 +398,7 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--max_output_len", type=int, default=256, help="maximum num of wordpieces/summary. Used for training and testing")
         parser.add_argument("--max_input_len", type=int, default=512, help="maximum num of wordpieces/summary. Used for training and testing")
         parser.add_argument("--wandb", type=str, default=None, help="WandB project name to use if logging fine-tuning with WandB.")
+        parser.add_argument("--remove_special_tokens_containing", type=str, nargs="+", help="Remove tokens from the special_tokens_map that contain this string")
         
         parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
         parser.add_argument("--num_workers", type=int, default=0, help="Number of data loader workers")
@@ -495,6 +510,10 @@ def main(args):
                          )
     ## write config + tokenizer to save_dir
     model.model.save_pretrained(args.save_dir + "/" + args.save_prefix)
+    if args.remove_special_tokens_containing:
+        print("special tokens before:", model.tokenizer.special_tokens_map)
+        model.tokenizer = remove_special_tokens(model.tokenizer, args.remove_special_tokens_containing)
+        print("special tokens after:", model.tokenizer.special_tokens_map)
     model.tokenizer.save_pretrained(args.save_dir + "/" + args.save_prefix)
     trainer.fit(model)
     print("Training ended. Best checkpoint {} with {} {}.".format(model.best_checkpoint, model.best_metric, args.early_stopping_metric))
