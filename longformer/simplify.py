@@ -32,7 +32,7 @@ import datasets
 import collections
 
 from . import simplification
-from longformer.simplification import prepare_input, get_eval_scores
+from longformer.simplification import prepare_input, get_eval_scores, remove_special_tokens
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -95,18 +95,7 @@ class InferenceSimplifier(pl.LightningModule):
         self.tokenizer = MBartTokenizer.from_pretrained(self.args.tokenizer, use_fast=True)
         if args.remove_special_tokens_containing:
             print("special tokens before:", self.tokenizer.special_tokens_map)
-            to_remove = set()
-            for contains_str in args.remove_special_tokens_containing:
-                to_remove = to_remove.union({
-                    token for token in self.tokenizer.additional_special_tokens
-                    if contains_str in token
-                })
-            print("removing special tokens:", to_remove)
-            self.tokenizer.additional_special_tokens = [
-                token for token in self.tokenizer.additional_special_tokens
-                if token not in to_remove
-            ]
-            self.tokenizer.special_tokens_map["additional_special_tokens"] = str(self.tokenizer.additional_special_tokens)
+            self.tokenizer = remove_special_tokens(self.tokenizer, args.remove_special_tokens_containing)
             print("special tokens after:", self.tokenizer.special_tokens_map)
 
         self.max_input_len = self.args.max_input_len if self.args.max_input_len is not None else self.config.max_encoder_position_embeddings

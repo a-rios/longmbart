@@ -79,6 +79,20 @@ def prepare_input(input_ids, model, attention_mode, pad_token_id, global_attenti
                 input_ids, attention_mask, half_padding_mod, pad_token_id)
         return input_ids, attention_mask
 
+def remove_special_tokens(tokenizer, special_token_substrings):
+    to_remove = set()
+    for contains_str in special_token_substrings:
+        to_remove = to_remove.union({
+            token for token in tokenizer.additional_special_tokens
+            if contains_str in token
+        })
+    tokenizer.additional_special_tokens = [
+        token for token in tokenizer.additional_special_tokens
+        if token not in to_remove
+    ]
+    tokenizer.special_tokens_map["additional_special_tokens"] = str(tokenizer.additional_special_tokens)
+    return tokenizer
+
 def get_eval_scores(gold_strs, generated_strs, remove_trg_tag=False, vloss=None):
         if vloss is None:
             vloss = torch.zeros(len(gold_strs))
@@ -498,18 +512,7 @@ def main(args):
     model.model.save_pretrained(args.save_dir + "/" + args.save_prefix)
     if args.remove_special_tokens_containing:
         print("special tokens before:", model.tokenizer.special_tokens_map)
-        to_remove = set()
-        for contains_str in args.remove_special_tokens_containing:
-            to_remove = to_remove.union({
-                token for token in model.tokenizer.additional_special_tokens
-                if contains_str in token
-            })
-        print("removing special tokens:", to_remove)
-        model.tokenizer.additional_special_tokens = [
-            token for token in model.tokenizer.additional_special_tokens
-            if token not in to_remove
-        ]
-        model.tokenizer.special_tokens_map["additional_special_tokens"] = str(model.tokenizer.additional_special_tokens)
+        model.tokenizer = remove_special_tokens(model.tokenizer, args.remove_special_tokens_containing)
         print("special tokens after:", model.tokenizer.special_tokens_map)
     model.tokenizer.save_pretrained(args.save_dir + "/" + args.save_prefix)
     trainer.fit(model)
