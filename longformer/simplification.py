@@ -7,7 +7,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoConfig
 from transformers.optimization import get_linear_schedule_with_warmup, Adafactor
-import nlp
+
 from rouge_score import rouge_scorer
 import sacrebleu
 
