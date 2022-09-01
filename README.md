@@ -96,3 +96,30 @@ python -m longformer.simplify \
 ```
 Reference file is optional, if given, will print evaluation metrics (rouge1, rouge2, rougeL, rougeLsum, bleu). 
 If only one target language, use `--tgt_lang` to set, if multiple languages, either give a reference file with tags (`tgt_lang target_sequence`) with `--tags_included` or just a list of target tags with `--target_tags` (one tag per line for each sample in `--test_source`).
+
+### Citation
+If you use code in this repository, please cite the following publication:
+
+Annette Rios, Nicolas Spring, Tannon Kew, Marek Kostrzewa, Andreas Säuberli, Mathias Müller, and Sarah Ebling. 2021. [A New Dataset and Efficient Baselines for Document-level Text Simplification in German.](https://aclanthology.org/2021.newsum-1.16/) In Proceedings of the Third Workshop on New Frontiers in Summarization, pages 152–161, Online and in Dominican Republic. Association for Computational Linguistics.
+
+Bibtex:
+```
+@inproceedings{rios-etal-2021-new,
+    title = "A New Dataset and Efficient Baselines for Document-level Text Simplification in {G}erman",
+    author = {Rios, Annette  and
+      Spring, Nicolas  and
+      Kew, Tannon  and
+      Kostrzewa, Marek  and
+      S{\"a}uberli, Andreas  and
+      M{\"u}ller, Mathias  and
+      Ebling, Sarah},
+    booktitle = "Proceedings of the Third Workshop on New Frontiers in Summarization",
+    month = nov,
+    year = "2021",
+    address = "Online and in Dominican Republic",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2021.newsum-1.16",
+    doi = "10.18653/v1/2021.newsum-1.16",
+    pages = "152--161",
+}
+```
