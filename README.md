@@ -2,6 +2,8 @@
 
 Pretrained mBART model from huggingface with `Longformer` windowed attention in encoder (decoder has standard attention).
 
+NOTE: [ats_models](https://github.com/a-rios/ats-models) is an updated version of this repository that does not rely on modifications of the transformer library itself, i.e. it runs with newer versions of their code. 
+
 ### Installation
 
 ```
