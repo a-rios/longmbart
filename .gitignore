@@ -127,3 +127,6 @@ dmypy.json
 # logs
 logs/
 wandb/
+
+# pycharm
+.idea/

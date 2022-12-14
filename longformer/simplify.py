@@ -73,9 +73,9 @@ class SimplificationDatasetForInference(Dataset):
 
     @staticmethod
     def collate_fn(batch):
-        
+
         pad_token_id = 1
-    
+
         input_ids, ref, target_tags = list(zip(*batch))
         input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=pad_token_id)
         return input_ids, ref, target_tags
@@ -86,11 +86,11 @@ class InferenceSimplifier(pl.LightningModule):
     def __init__(self, args):
         super().__init__()
         self.args = args
-       
+
         self.src_lang = self.args.src_lang
         self.tgt_lang = self.args.tgt_lang
         self.tags_included = self.args.tags_included
-        
+
         self.config = MLongformerEncoderDecoderConfig.from_pretrained(self.args.model_path)
         self.tokenizer = MBartTokenizer.from_pretrained(self.args.tokenizer, use_fast=True)
         if args.remove_special_tokens_containing:
@@ -99,9 +99,9 @@ class InferenceSimplifier(pl.LightningModule):
             print("special tokens after:", self.tokenizer.special_tokens_map)
 
         self.max_input_len = self.args.max_input_len if self.args.max_input_len is not None else self.config.max_encoder_position_embeddings
-        self.max_output_len = self.args.max_output_len if self.args.max_output_len is not None else self.config.max_decoder_position_embeddings 
+        self.max_output_len = self.args.max_output_len if self.args.max_output_len is not None else self.config.max_decoder_position_embeddings
         self.test_dataloader_object = None
-    
+
     def test_step(self, batch, batch_nb):
         for p in self.model.parameters():
             p.requires_grad = False
@@ -165,13 +165,13 @@ class InferenceSimplifier(pl.LightningModule):
             with open(self.args.translation, 'a') as f:
                 for sample in generated_strs:
                     f.write(sample + "\n")
-            
+
             if self.args.test_target is not None:
                 return get_eval_scores(ref, generated_strs, self.tags_included)
             else:
                 return {'decoded' : generated_strs}
-        
-        else:            
+
+        else:
             # if running inference with self.args.batch_size
             # > 1, we need to make sure we pair the correct input sequence
             # with the correct returned hypotheses.
@@ -202,17 +202,17 @@ class InferenceSimplifier(pl.LightningModule):
                 # overall NLL probability scores (smaller = better).
                 scored_hyps = {score: hyp for score, hyp in zip(scores, hyps)}
                 for i, score in enumerate(sorted(scored_hyps.keys(), reverse=True)):
-                    # add the 1-best hypothesis to generated_strs for evaluation             
+                    # add the 1-best hypothesis to generated_strs for evaluation
                     if i == 0:
                         generated_strs.append(scored_hyps[score])
                     output_dict['hyps'].append({'score': score, 'hyp': scored_hyps[score]})
-                
+
                 json_line = json.dumps(output_dict, ensure_ascii=False)
                 with open(self.args.translation, 'a') as f:
                     f.write(json_line+"\n")
-        
+
             if self.args.test_target is not None:
-                return self.get_eval_scores(ref, generated_strs, self.tags_included)
+                return get_eval_scores(ref, generated_strs, self.tags_included)
 
             else:
                 return {'decoded' : generated_strs}
@@ -221,7 +221,7 @@ class InferenceSimplifier(pl.LightningModule):
     def test_epoch_end(self, outputs):
         for p in self.model.parameters():
             p.requires_grad = True
-    
+
         if self.args.test_target is not None:
             names = ['rouge1', 'rouge2', 'rougeL', 'rougeLsum', 'bleu']
             metrics = []
@@ -235,7 +235,7 @@ class InferenceSimplifier(pl.LightningModule):
 
     def forward(self):
         pass
-    
+
     def _get_dataloader(self, current_dataloader, split_name, is_train):
         if current_dataloader is not None:
             return current_dataloader
@@ -249,7 +249,7 @@ class InferenceSimplifier(pl.LightningModule):
             target_tags = self.datasets["target_tags"]
         dataset = SimplificationDatasetForInference(inputs=self.datasets[split_name + "_source"], reference=reference , name=split_name, tokenizer=self.tokenizer,
                                        max_input_len=self.max_input_len, max_output_len=self.max_output_len, src_lang=self.src_lang, tgt_lang=self.tgt_lang, tags_included=self.tags_included, target_tags=target_tags)
-      
+
         sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=is_train) if self.trainer.use_ddp else None
 
         return DataLoader(dataset, batch_size=self.args.batch_size, shuffle=(sampler is None),
@@ -274,7 +274,7 @@ class InferenceSimplifier(pl.LightningModule):
         parser.add_argument("--model_path", type=str, help="Path to the checkpoint directory or model name")
         parser.add_argument("--checkpoint_name", type=str, help="Checkpoint in model_path to use.")
         parser.add_argument("--tokenizer", type=str, help="Path to the tokenizer directory.")
-        
+
         #data
         parser.add_argument("--test_source", type=str, default=None, help="Path to the source test file.")
         parser.add_argument("--test_target", type=str, default=None, help="Path to the target test file (optional, if given, will output rouge and bleu).")
@@ -290,11 +290,11 @@ class InferenceSimplifier(pl.LightningModule):
         parser.add_argument("--remove_special_tokens_containing", type=str, nargs="+", help="Remove tokens from the special_tokens_map that contain this string")
         # TODO
         # parser.add_argument("--do_predict", action="store_true", default=False, help="If given, predictions are run using the `predict_step()` method rather than `test_step()`. Outputs are written to the specified output file without being evaluated!")
-        
+
         parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
         parser.add_argument("--num_workers", type=int, default=0, help="Number of data loader workers")
         parser.add_argument("--gpus", type=int, default=-1, help="Number of gpus. 0 for CPU")
-        
+
         ## inference params
         parser.add_argument("--translation", type=str, default='decoded.out', help="Output file to write decoded sequence to.")
         parser.add_argument("--beam_size", type=int, default=4, help="Beam size for inference when testing/validating. Default: 4.")
@@ -303,7 +303,7 @@ class InferenceSimplifier(pl.LightningModule):
         parser.add_argument("--keep_special_tokens", default=False, action="store_true", help="If true, do not skip special tokens.")
 
         parser.add_argument("--output_to_json", default=False, action="store_true", help='If true, decoding output is a verbose JSONL containing, src, tgt, and scored model output hyps')
-        
+
         # decoding strategy params (passed to model.generate() (in generation_utils.py))
         parser.add_argument("--do_sample", default=False, action="store_true", help='Whether or not to use sampling ; use greedy decoding otherwise.')
         parser.add_argument("--temperature", default=1.0, type=float, help='The value used to module the next token probabilities.')
@@ -314,12 +314,12 @@ class InferenceSimplifier(pl.LightningModule):
         parser.add_argument("--output_scores", default=False, action="store_true", help='Whether or not to return the prediction scores.')
         parser.add_argument("--num_return_sequences", default=1, type=int, help='The number of independently computed returned sequences for each element in the batch, i.e. N-best')
         parser.add_argument("--return_dict_in_generate", default=False, action="store_true", help='Whether or not to return a :class:`~transformers.file_utils.ModelOutput` instead of a plain tuple.')
-        
+
         #logging params
         parser.add_argument("--progress_bar_refresh_rate", type=int, default=0, help="How often to refresh progress bar (in steps). Value 0 disables progress bar.")
         parser.add_argument("--fp32", action='store_true', help="default is fp16. Use --fp32 to switch to fp32")
         parser.add_argument("--print_params", action='store_true', help="Print parameter names and shapes.")
-        
+
         return parser
 
 
@@ -331,22 +331,22 @@ def main(args):
 
     checkpoint_path=os.path.join(args.model_path, args.checkpoint_name)
     simplifier = InferenceSimplifier(args)
-    
+
     if torch.cuda.is_available and args.gpus > 0:
         cp = torch.load(checkpoint_path)
     else:
         cp = torch.load(checkpoint_path, map_location=torch.device("cpu"))
     simplifier.model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.model_path)
-   
+
     simplifier.load_state_dict(cp["state_dict"])
     #simplifier.load_from_checkpoint(checkpoint_path, args) ## does not work ("unexpected keys")
-     
+
     if args.print_params:
         for name, param in simplifier.named_parameters():
             if param.requires_grad:
                 print(name + ":" + str(param.data.shape))
         exit(0)
-    
+
     if args.test_target is not None:
         simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source, 'test_target': args.test_target })
     else:
@@ -359,7 +359,7 @@ def main(args):
             # text tags that can be loaded
             # NOTE: tags_included expects input sequences to
             # be prefixed with a single language tag, e.g. de_DE
-            target_tags_dict = {'text': [text.split()[0] for text in data_dict['test_source']['text']]} 
+            target_tags_dict = {'text': [text.split()[0] for text in data_dict['test_source']['text']]}
             data_dict['target_tags'] = datasets.Dataset.from_dict(target_tags_dict)
             simplifier.datasets = data_dict
         elif args.target_tags is not None:
@@ -391,11 +391,11 @@ def main(args):
             logger=logger,
             progress_bar_refresh_rate=args.progress_bar_refresh_rate,
         )
-    
+
     trainer.test(simplifier)
-    
+
     print("Decoded outputs written to {}".format(args.translation))
-        
+
 
 if __name__ == "__main__":
     main_arg_parser = argparse.ArgumentParser(description="simplification")
