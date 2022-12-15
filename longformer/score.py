@@ -27,6 +27,7 @@ import logging
 from transformers import MBartTokenizer
 from transformers import MBartForConditionalGeneration
 from longformer.simplification import SimplificationDataset, Simplifier
+from longformer.simplify import InferenceSimplifier
 from longformer.longformer_encoder_decoder import LongformerSelfAttentionForBart
 from longformer.longformer_encoder_decoder_mbart import MLongformerEncoderDecoderForConditionalGeneration, MLongformerEncoderDecoderConfig
 import datasets
@@ -82,25 +83,30 @@ logging.basicConfig(level=logging.INFO)
 #         return input_ids, ref, target_tags
 
 
-class SimplifierScorer(Simplifier):
+class SimplifierScorer(InferenceSimplifier):
 
     def __init__(self, params):
         super().__init__(params)
-        # self.args = params
-        # self.hparams = params
-        # self.src_lang = self.args.src_lang
-        # self.tgt_lang = self.args.tgt_lang
-        # self.tags_included = self.args.tags_included
-        # if self.args.from_pretrained is not None or args.resume_ckpt is not None:  ## TODO check if this is true with resume_ckpt
-        #     self._set_config()
-        #     self._load_pretrained()
-        #
-        # self.train_dataloader_object = self.val_dataloader_object = self.test_dataloader_object = None
-        # self.current_checkpoint = 0
-        # self.best_checkpoint = None
-        # self.best_metric = 10000 if self.args.early_stopping_metric == 'vloss' else 0  ## keep track of best dev value of whatever metric is used in early stopping callback
-        # self.num_not_improved = 0
-        # self.save_hyperparameters()
+
+    def _get_dataloader(self, current_dataloader, split_name, is_train):
+        if current_dataloader is not None:
+            return current_dataloader
+        reference = None
+        if self.args.test_target is not None:
+            reference = self.datasets[split_name + "_target"]
+        target_tags = None
+        if self.args.target_tags is not None:
+            target_tags = self.datasets["target_tags"]
+        elif self.args.infer_target_tags:
+            target_tags = self.datasets["target_tags"]
+        dataset = SimplificationDataset(inputs=self.datasets[split_name + "_source"], reference=reference , name=split_name, tokenizer=self.tokenizer,
+                                       max_input_len=self.max_input_len, max_output_len=self.max_output_len, src_lang=self.src_lang, tgt_lang=self.tgt_lang, tags_included=self.tags_included, target_tags=target_tags)
+
+        sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=is_train) if self.trainer.use_ddp else None
+
+        return DataLoader(dataset, batch_size=self.args.batch_size, shuffle=(sampler is None),
+                          num_workers=self.args.num_workers, sampler=sampler,
+                          collate_fn=SimplificationDataset.collate_fn)
 
     def forward(self, input_ids, decoder_input_ids, labels):
         input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode,
