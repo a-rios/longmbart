@@ -140,16 +140,16 @@ class SimplifierScorer(InferenceSimplifier):
             loss, nll_loss = label_smoothed_nll_loss(
                 lprobs, labels, self.args.label_smoothing, ignore_index=self.tokenizer.pad_token_id
             )
-        return loss[0]
+        return loss
 
     def test_step(self, batch, batch_nb):
-        print(batch)
+        print("batch", batch)
         loss = self.forward(*batch)
-        print(loss)
+        print("loss",loss)
         source_strs = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=not self.args.keep_special_tokens)
-        print(source_strs)
+        print("source", source_strs)
         target_strs = self.tokenizer.batch_decode(generated_ids.sequences.tolist(), skip_special_tokens=not self.args.keep_special_tokens)
-        print(target_strs)
+        print("target",target_strs)
 
 
         # generated_strs = []
