@@ -227,7 +227,7 @@ def main(args):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
 
-    model = Simplifier(args)
+    model = SimplifierScorer(args)
 
     if args.print_params:
         for name, param in model.named_parameters():
