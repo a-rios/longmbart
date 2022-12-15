@@ -146,10 +146,13 @@ class SimplifierScorer(InferenceSimplifier):
         print("batch", batch)
         loss = self.forward(*batch)
         print("loss",loss)
+
+        input_ids, ref, tags = batch
         source_strs = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=not self.args.keep_special_tokens)
         print("source", source_strs)
-        target_strs = self.tokenizer.batch_decode(generated_ids.sequences.tolist(), skip_special_tokens=not self.args.keep_special_tokens)
-        print("target",target_strs)
+        ref_strs = self.tokenizer.batch_decode(ref.sequences.tolist(), skip_special_tokens=not
+        self.args.keep_special_tokens)
+        print("ref",ref_strs)
 
 
         # generated_strs = []
