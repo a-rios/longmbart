@@ -129,178 +129,158 @@ class SimplifierScorer(Simplifier):
     def test_step(self, batch, batch_nb):
         return self.forward(*batch)
 
-
     @staticmethod
     def add_model_specific_args(parser, root_dir):
+        parser.add_argument("--model_path", type=str, help="Path to the checkpoint directory or model name")
+        parser.add_argument("--checkpoint_name", type=str, help="Checkpoint in model_path to use.")
         parser.add_argument("--tokenizer", type=str, help="Path to the tokenizer directory.")
-        parser.add_argument("--save_dir", type=str, default='simplification', help="Directory to save models.")
-        parser.add_argument("--save_prefix", type=str, default='test', help="subfolder in save_dir for this model")
-        parser.add_argument("--resume_ckpt", type=str, help="Path of a checkpoint to resume from")
-        parser.add_argument("--from_pretrained", type=str, default=None,
-                            help="Path to a checkpoint to load model weights but not training state")
-        parser.add_argument("--num_sanity_val_steps", type=int, default=0,
-                            help="Number of evaluation sanity steps to run before starting the training. Default: 0.")
 
         # data
-        parser.add_argument("--train_source", type=str, default=None, help="Path to the source train file.")
-        parser.add_argument("--train_target", type=str, default=None, help="Path to the target train file.")
-        parser.add_argument("--val_source", type=str, default=None, help="Path to the source validation file.")
-        parser.add_argument("--val_target", type=str, default=None, help="Path to the target validation file.")
-        parser.add_argument("--test_source", type=str, default=None,
-                            help="Path to the source test file (to evaluate after training is finished).")
+        parser.add_argument("--test_source", type=str, default=None, help="Path to the source test file.")
         parser.add_argument("--test_target", type=str, default=None,
-                            help="Path to the target test file (to evaluate after training is finished).")
+                            help="Path to the target test file (optional, if given, will output rouge and bleu).")
+        parser.add_argument("--target_tags", type=str, default=None,
+                            help="If test_target is not given: provide path to file with list of target tags (one per sample in test_source).")
         parser.add_argument("--src_lang", type=str, default=None,
                             help="Source language tag (optional, for multilingual batches, preprocess text files to include language tags.")
         parser.add_argument("--tgt_lang", type=str, default=None,
                             help="Target language tag (optional, for multilingual batches, preprocess text files to include language tags.")
         parser.add_argument("--tags_included", action='store_true',
                             help="Text files already contain special tokens (language tags and </s>. Source:  src_tag seq, Target:  tgt_tag seq. Note: actual source sequence is seq src_tag </s>, will be changed internally after possibly clipping sequence to given max_length.")
-        parser.add_argument("--max_output_len", type=int, default=256,
-                            help="maximum num of wordpieces/summary. Used for training and testing")
-        parser.add_argument("--max_input_len", type=int, default=512,
-                            help="maximum num of wordpieces/summary. Used for training and testing")
-        parser.add_argument("--wandb", type=str, default=None,
-                            help="WandB project name to use if logging fine-tuning with WandB.")
+        parser.add_argument("--infer_target_tags", action="store_true", default=False,
+                            help="If test_target is not given and target language tags can be inferred from the source language tags provided with --tags_included (e.g. de_DE -> de_DE). This save having a dedicated text file in which the tags are explicitly specified.")
+        parser.add_argument("--max_input_len", type=int, default=256,
+                            help="maximum num of wordpieces, if unspecified, will use number of encoder positions from model config.")
+        parser.add_argument("--max_output_len", type=int, default=512,
+                            help="maximum num of wordpieces, if unspecified, will use number of decoder positions from model config.")
+        parser.add_argument("--bad_words", type=str, default=None, help="Path to file containing bad words.")
+        parser.add_argument("--used_bad_words", type=str, default=None,
+                            help="Path to file where used bad words should be saved.")
         parser.add_argument("--remove_special_tokens_containing", type=str, nargs="+",
                             help="Remove tokens from the special_tokens_map that contain this string")
+        # TODO
+        # parser.add_argument("--do_predict", action="store_true", default=False, help="If given, predictions are run using the `predict_step()` method rather than `test_step()`. Outputs are written to the specified output file without being evaluated!")
 
         parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
         parser.add_argument("--num_workers", type=int, default=0, help="Number of data loader workers")
-        parser.add_argument("--grad_accum", type=int, default=1, help="Number of gradient accumulation steps.")
         parser.add_argument("--gpus", type=int, default=-1, help="Number of gpus. 0 for CPU")
-        parser.add_argument("--seed", type=int, default=1234, help="Seed")
-
-        ## model params:
-        parser.add_argument("--attention_dropout", type=float, default=0.1, help="attention dropout")
-        parser.add_argument("--dropout", type=float, default=0.1, help="dropout")
-        parser.add_argument("--activation_dropout", type=float, default=0.0, help="activation_dropout")
-        parser.add_argument("--attention_mode", type=str, default='sliding_chunks', help="Longformer attention mode")
-        parser.add_argument("--attention_window", type=int, default=512, help="Attention window")
-        parser.add_argument("--label_smoothing", type=float, default=0.0, required=False)
-        parser.add_argument("--global_attention_indices", type=int, nargs='+', default=[-1], required=False,
-                            help="List of indices of positions with global attention for longformer attention. Supports negative indices (-1 == last non-padding token). Default: [-1] == last source token (==lang_id) .")
-
-        # Optimization params:
-        # parser.add_argument("--warmup", type=int, default=1000, help="Number of warmup steps")
-        parser.add_argument("--lr", type=float, default=0.00003, help="Initial learning rate")
-        parser.add_argument("--val_every", type=float, default=1.0,
-                            help="Number of training steps between validations in percent of an epoch.")
-        parser.add_argument("--val_percent_check", default=1.00, type=float, help='Percent of validation data used')
-        parser.add_argument("--max_epochs", type=int, default=100000,
-                            help="Maximum number of epochs (will stop training even if patience for early stopping has not been reached).")
-        parser.add_argument("--early_stopping_metric", type=str, default='rougeL',
-                            help="Metric to be used for early stopping: vloss, rouge1, rouge2, rougeL, rougeLsum, bleu")
-        parser.add_argument("--patience", type=int, default=10, help="Patience for early stopping.")
-        parser.add_argument("--min_delta", type=float, default=0.0,
-                            help="Minimum change in the monitored quantity to qualify as an improvement.")
-        parser.add_argument("--lr_reduce_patience", type=int, default=8,
-                            help="Patience for LR reduction in Plateau scheduler.")
-        parser.add_argument("--lr_reduce_factor", type=float, default=0.5,
-                            help="Learning rate reduce factor for Plateau scheduler.")
-        parser.add_argument("--disable_checkpointing", action='store_true', help="No logging or checkpointing")
-        parser.add_argument("--save_top_k", type=int, default=5,
-                            help="Number of best checkpoints to keep. Others will be removed.")
-        parser.add_argument('--grad_ckpt', action='store_true', help='Enable gradient checkpointing to save memory')
 
         ## inference params
-        parser.add_argument("--decoded", type=str, default='decoded.out',
+        parser.add_argument("--translation", type=str, default='decoded.out',
                             help="Output file to write decoded sequence to.")
         parser.add_argument("--beam_size", type=int, default=4,
                             help="Beam size for inference when testing/validating. Default: 4.")
         parser.add_argument("--test_percent_check", default=1.00, type=float, help='Percent of test data used')
+        parser.add_argument("--global_attention_indices", type=int, nargs='+', default=[-1], required=False,
+                            help="List of indices of positions with global attention for longformer attention. Supports negative indices (-1 == last non-padding token). Default: [-1] == last source token (==lang_id) .")
+        parser.add_argument("--keep_special_tokens", default=False, action="store_true",
+                            help="If true, do not skip special tokens.")
+
+        parser.add_argument("--output_to_json", default=False, action="store_true",
+                            help='If true, decoding output is a verbose JSONL containing, src, tgt, and scored model output hyps')
+
+        # decoding strategy params (passed to model.generate() (in generation_utils.py))
+        parser.add_argument("--do_sample", default=False, action="store_true",
+                            help='Whether or not to use sampling ; use greedy decoding otherwise.')
+        parser.add_argument("--temperature", default=1.0, type=float,
+                            help='The value used to module the next token probabilities.')
+        parser.add_argument("--top_k", default=50, type=int,
+                            help='The number of highest probability vocabulary tokens to keep for top-k-filtering.')
+        parser.add_argument("--top_p", default=1.0, type=float,
+                            help='If set to float < 1, only the most probable tokens with probabilities that add up to :obj:`top_p` or higher are kept for generation.')
+        parser.add_argument("--repetition_penalty", default=1.0, type=float,
+                            help='The parameter for repetition penalty. 1.0 means no penalty.')
+        parser.add_argument("--length_penalty", default=1.0, type=float,
+                            help='Exponential penalty to the length. 1.0 means no penalty.')
+        parser.add_argument("--output_scores", default=False, action="store_true",
+                            help='Whether or not to return the prediction scores.')
+        parser.add_argument("--num_return_sequences", default=1, type=int,
+                            help='The number of independently computed returned sequences for each element in the batch, i.e. N-best')
+        parser.add_argument("--return_dict_in_generate", default=False, action="store_true",
+                            help='Whether or not to return a :class:`~transformers.file_utils.ModelOutput` instead of a plain tuple.')
 
         # logging params
         parser.add_argument("--progress_bar_refresh_rate", type=int, default=0,
                             help="How often to refresh progress bar (in steps). Value 0 disables progress bar.")
         parser.add_argument("--fp32", action='store_true', help="default is fp16. Use --fp32 to switch to fp32")
-        parser.add_argument("--debug", action='store_true', help="debug run")
         parser.add_argument("--print_params", action='store_true', help="Print parameter names and shapes.")
 
         return parser
 
 
 def main(args):
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(args.seed)
+    if Path(args.translation).is_file():
+        logging.info("Output file `{}` already exists and will be overwritten...".format(args.translation))
+        Path(args.translation).unlink()
 
-    model = SimplifierScorer(args)
+    checkpoint_path = os.path.join(args.model_path, args.checkpoint_name)
+    simplifier = SimplifierScorer(args)
+
+    if torch.cuda.is_available and args.gpus > 0:
+        cp = torch.load(checkpoint_path)
+    else:
+        cp = torch.load(checkpoint_path, map_location=torch.device("cpu"))
+    simplifier.model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.model_path)
+
+    simplifier.load_state_dict(cp["state_dict"])
+    # simplifier.load_from_checkpoint(checkpoint_path, args) ## does not work ("unexpected keys")
 
     if args.print_params:
-        for name, param in model.named_parameters():
+        for name, param in simplifier.named_parameters():
             if param.requires_grad:
                 print(name + ":" + str(param.data.shape))
         exit(0)
 
-    model.datasets = datasets.load_dataset('text', data_files={'train_source': args.train_source,
-                                                               'train_target': args.train_target,
-                                                               'val_source': args.val_source,
-                                                               'val_target': args.val_target,
-                                                               'test_source': args.test_source,
-                                                               'test_target': args.test_target})
-
-    if args.wandb:
-        logger = WandbLogger(project=args.wandb)
+    if args.test_target is not None:
+        simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source,
+                                                                        'test_target': args.test_target})
     else:
-        logger = TestTubeLogger(
-            save_dir=args.save_dir,
-            name=args.save_prefix,
-            version=0  # always use version=0
+        if args.tags_included and args.infer_target_tags:
+            # source texts must start in with a single valid language tag,
+            # e.g. de_DE, en_XX, etc.
+            data_dict = datasets.load_dataset('text', data_files={'test_source': args.test_source})
+            # datasets library allows loading from an
+            # in-memory dict, so construct one from the source
+            # text tags that can be loaded
+            # NOTE: tags_included expects input sequences to
+            # be prefixed with a single language tag, e.g. de_DE
+            target_tags_dict = {'text': [text.split()[0] for text in data_dict['test_source']['text']]}
+            data_dict['target_tags'] = datasets.Dataset.from_dict(target_tags_dict)
+            simplifier.datasets = data_dict
+        elif args.target_tags is not None:
+            simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source,
+                                                                            'target_tags': args.target_tags})
+        else:
+            simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source})
+
+    logger = TestTubeLogger(
+        save_dir=".",
+        name="decode.log",
+        version=0  # always use version=0
+    )
+
+    if torch.cuda.is_available and args.gpus > 0:
+        trainer = pl.Trainer(
+            gpus=args.gpus,
+            distributed_backend='ddp' if torch.cuda.is_available() else None,
+            replace_sampler_ddp=False,
+            limit_test_batches=args.test_percent_check,
+            logger=logger,
+            progress_bar_refresh_rate=args.progress_bar_refresh_rate,
+            precision=32 if args.fp32 else 16, amp_level='O2'
+        )
+    else:
+        trainer = pl.Trainer(
+            gpus=args.gpus,
+            replace_sampler_ddp=False,
+            limit_test_batches=args.test_percent_check,
+            logger=logger,
+            progress_bar_refresh_rate=args.progress_bar_refresh_rate,
         )
 
-    print(args)
+    trainer.test(simplifier)
 
-    model.lr_mode = 'max'
-    # if args.early_stopping_metric == 'val_loss':
-    if args.early_stopping_metric == 'vloss':
-        model.lr_mode = 'min'
-    early_stop_callback = EarlyStopping(monitor=args.early_stopping_metric, min_delta=args.min_delta,
-                                        patience=args.patience, verbose=True,
-                                        mode=model.lr_mode)  # metrics: val_loss, bleu, rougeL
-
-    custom_checkpoint_path = "checkpoint{{epoch:02d}}_{{{}".format(args.early_stopping_metric)
-    custom_checkpoint_path += ':.5f}'
-
-    checkpoint_callback = ModelCheckpoint(
-        filepath=os.path.join(args.save_dir, args.save_prefix, custom_checkpoint_path),
-        save_top_k=args.save_top_k,
-        verbose=True,
-        monitor=args.early_stopping_metric,
-        mode=model.lr_mode,
-        prefix='')
-
-    trainer = pl.Trainer(gpus=args.gpus, distributed_backend='ddp' if torch.cuda.is_available() else None,
-                         track_grad_norm=-1,
-                         max_epochs=args.max_epochs if not args.debug else 100,
-                         max_steps=None if not args.debug else 1,
-                         replace_sampler_ddp=False,
-                         accumulate_grad_batches=args.grad_accum,
-                         val_check_interval=args.val_every if not args.debug else 1,
-                         num_sanity_val_steps=args.num_sanity_val_steps,
-                         check_val_every_n_epoch=1 if not (args.debug) else 1,
-                         limit_val_batches=args.val_percent_check,
-                         limit_test_batches=args.test_percent_check,
-                         logger=logger,
-                         checkpoint_callback=checkpoint_callback if not args.disable_checkpointing else False,
-                         progress_bar_refresh_rate=args.progress_bar_refresh_rate,
-                         precision=32 if args.fp32 else 16, amp_level='O2',
-                         resume_from_checkpoint=args.resume_ckpt,
-                         callbacks=[early_stop_callback]
-                         )
-    ## write config + tokenizer to save_dir
-    # model.model.save_pretrained(args.save_dir + "/" + args.save_prefix)
-    # if args.remove_special_tokens_containing:
-    #     print("special tokens before:", model.tokenizer.special_tokens_map)
-    #     model.tokenizer = remove_special_tokens(model.tokenizer, args.remove_special_tokens_containing)
-    #     print("special tokens after:", model.tokenizer.special_tokens_map)
-    # model.tokenizer.save_pretrained(args.save_dir + "/" + args.save_prefix)
-    # trainer.fit(model)
-    # print("Training ended. Best checkpoint {} with {} {}.".format(model.best_checkpoint, model.best_metric,
-    # args.early_stopping_metric))
-    trainer.test(model)
+    print("Decoded outputs written to {}".format(args.translation))
 
 
 if __name__ == "__main__":
@@ -308,3 +288,4 @@ if __name__ == "__main__":
     parser = SimplifierScorer.add_model_specific_args(main_arg_parser, os.getcwd())
     args = parser.parse_args()
     main(args)
+
