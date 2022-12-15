@@ -130,7 +130,7 @@ class SimplifierScorer(InferenceSimplifier):
             decoder_attention_mask=decoder_attention_mask,
             use_cache=False, )
         lm_logits = outputs[0]
-        if self.args.label_smoothing == 0:
+        if True: # self.args.label_smoothing == 0:
             # Same behavior as modeling_bart.py, besides ignoring pad_token_id
             ce_loss_fct = torch.nn.CrossEntropyLoss(ignore_index=self.tokenizer.pad_token_id)
             assert lm_logits.shape[-1] == self.model.config.vocab_size
