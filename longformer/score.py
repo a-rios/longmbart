@@ -126,7 +126,6 @@ class SimplifierScorer(Simplifier):
             )
         return [loss]
 
-    @override
     def test_step(self, batch, batch_nb):
         return self.forward(*batch)
 
