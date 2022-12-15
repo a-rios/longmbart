@@ -102,7 +102,7 @@ class SimplifierScorer(InferenceSimplifier):
         sampler = torch.utils.data.distributed.DistributedSampler(dataset,
                                                                   shuffle=is_train) if self.trainer.use_ddp else None
 
-        return DataLoader(dataset, batch_size=self.args.batch_size, shuffle=(sampler is None),
+        return DataLoader(dataset, batch_size=1, shuffle=(sampler is None),
                           num_workers=self.args.num_workers, sampler=sampler,
                           collate_fn=SimplificationDataset.collate_fn)
 
@@ -140,10 +140,50 @@ class SimplifierScorer(InferenceSimplifier):
             loss, nll_loss = label_smoothed_nll_loss(
                 lprobs, labels, self.args.label_smoothing, ignore_index=self.tokenizer.pad_token_id
             )
-        return [loss]
+        return loss[0]
 
     def test_step(self, batch, batch_nb):
-        return self.forward(*batch)
+        print(batch)
+        loss = self.forward(*batch)
+        print(loss)
+        source_strs = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=not self.args.keep_special_tokens)
+        print(source_strs)
+        target_strs = self.tokenizer.batch_decode(generated_ids.sequences.tolist(), skip_special_tokens=not self.args.keep_special_tokens)
+        print(target_strs)
+
+
+        # generated_strs = []
+        #
+        # for batch_i in range(len(batch_source_strs)):
+        #     src_str = batch_source_strs[batch_i]
+        #     if self.args.test_target:
+        #         ref_str = ' '.join(ref[batch_i].split(' ')[1:]) if self.tags_included else ref[batch_i]
+        #     else:
+        #         ref_str = None
+        #
+        #     # subselect only those hyps/scores for the
+        #     # relevant src string
+        #     hyps = batch_hyp_strs[batch_i:batch_i + self.args.num_return_sequences]
+        #     scores = batch_hyp_scores[batch_i:batch_i + self.args.num_return_sequences]
+        #
+        #     output_dict = {
+        #         'src': src_str,
+        #         'ref': ref_str,
+        #         'hyps': [],
+        #     }
+        #     # Ensure output hyps are sorted by
+        #     # overall NLL probability scores (smaller = better).
+        #     scored_hyps = {score: hyp for score, hyp in zip(scores, hyps)}
+        #     for i, score in enumerate(sorted(scored_hyps.keys(), reverse=True)):
+        #         # add the 1-best hypothesis to generated_strs for evaluation
+        #         if i == 0:
+        #             generated_strs.append(scored_hyps[score])
+        #         output_dict['hyps'].append({'score': score, 'hyp': scored_hyps[score]})
+        #
+        #     json_line = json.dumps(output_dict, ensure_ascii=False)
+        #     with open(self.args.translation, 'a') as f:
+        #         f.write(json_line + "\n")
+
 
     def test_epoch_end(self, outputs):
         print(outputs)
@@ -153,6 +193,7 @@ class SimplifierScorer(InferenceSimplifier):
         parser.add_argument("--model_path", type=str, help="Path to the checkpoint directory or model name")
         parser.add_argument("--checkpoint_name", type=str, help="Checkpoint in model_path to use.")
         parser.add_argument("--tokenizer", type=str, help="Path to the tokenizer directory.")
+        parser.add_argument("--output", type=str, help="Path to the output file.")
 
         # data
         parser.add_argument("--test_source", type=str, default=None, help="Path to the source test file.")
@@ -180,7 +221,6 @@ class SimplifierScorer(InferenceSimplifier):
         # TODO
         # parser.add_argument("--do_predict", action="store_true", default=False, help="If given, predictions are run using the `predict_step()` method rather than `test_step()`. Outputs are written to the specified output file without being evaluated!")
 
-        parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
         parser.add_argument("--num_workers", type=int, default=0, help="Number of data loader workers")
         parser.add_argument("--gpus", type=int, default=-1, help="Number of gpus. 0 for CPU")
 
