@@ -145,6 +145,9 @@ class SimplifierScorer(InferenceSimplifier):
     def test_step(self, batch, batch_nb):
         return self.forward(*batch)
 
+    def test_epoch_end(self, outputs):
+        print(outputs)
+
     @staticmethod
     def add_model_specific_args(parser, root_dir):
         parser.add_argument("--model_path", type=str, help="Path to the checkpoint directory or model name")
