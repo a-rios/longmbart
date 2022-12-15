@@ -386,6 +386,10 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--num_sanity_val_steps", type=int, default=0,  help="Number of evaluation sanity steps to run before starting the training. Default: 0.")
         
         #data
+        parser.add_argument("--train_source", type=str, default=None, help="Path to the source train file.")
+        parser.add_argument("--train_target", type=str, default=None, help="Path to the target train file.")
+        parser.add_argument("--val_source", type=str, default=None, help="Path to the source validation file.")
+        parser.add_argument("--val_target", type=str, default=None, help="Path to the target validation file.")
         parser.add_argument("--test_source", type=str, default=None, help="Path to the source test file (to score translation).")
         parser.add_argument("--test_target", type=str, default=None, help="Path to the target test file (to score translation).")
         parser.add_argument("--src_lang", type=str, default=None, help="Source language tag (optional, for multilingual batches, preprocess text files to include language tags.")
@@ -456,7 +460,7 @@ def main(args):
         exit(0)
     
   
-    model.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source, 'test_target': args.test_target })
+    model.datasets = datasets.load_dataset('text', data_files={'train_source': args.train_source, 'train_target': args.train_target, 'val_source': args.val_source, 'val_target': args.val_target, 'test_source': args.test_source, 'test_target': args.test_target })
 
     if args.wandb:
         logger = WandbLogger(project=args.wandb)
@@ -511,9 +515,8 @@ def main(args):
         model.tokenizer = remove_special_tokens(model.tokenizer, args.remove_special_tokens_containing)
         print("special tokens after:", model.tokenizer.special_tokens_map)
     model.tokenizer.save_pretrained(args.save_dir + "/" + args.save_prefix)
-    #trainer.fit(model)
-    #print("Training ended. Best checkpoint {} with {} {}.".format(model.best_checkpoint, model.best_metric,
-    # args.early_stopping_metric))
+    trainer.fit(model)
+    print("Training ended. Best checkpoint {} with {} {}.".format(model.best_checkpoint, model.best_metric, args.early_stopping_metric))
     trainer.test(model)
 
 
