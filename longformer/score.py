@@ -219,78 +219,88 @@ class SimplifierScorer(Simplifier):
 
         return parser
 
+
 def main(args):
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
-    if Path(args.translation).is_file():
-        logging.info("Output file `{}` already exists and will be overwritten...".format(args.translation))
-        Path(args.translation).unlink()
-
-    checkpoint_path=os.path.join(args.model_path, args.checkpoint_name)
-    simplifier = SimplifierScorer(args)
-
-    if torch.cuda.is_available and args.gpus > 0:
-        cp = torch.load(checkpoint_path)
-    else:
-        cp = torch.load(checkpoint_path, map_location=torch.device("cpu"))
-    simplifier.model = MLongformerEncoderDecoderForConditionalGeneration.from_pretrained(args.model_path)
-
-    simplifier.load_state_dict(cp["state_dict"])
-    #simplifier.load_from_checkpoint(checkpoint_path, args) ## does not work ("unexpected keys")
+    model = Simplifier(args)
 
     if args.print_params:
-        for name, param in simplifier.named_parameters():
+        for name, param in model.named_parameters():
             if param.requires_grad:
                 print(name + ":" + str(param.data.shape))
         exit(0)
 
-    if args.test_target is not None:
-        simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source, 'test_target': args.test_target })
-    else:
-        if args.tags_included and args.infer_target_tags:
-            # source texts must start in with a single valid language tag,
-            # e.g. de_DE, en_XX, etc.
-            data_dict = datasets.load_dataset('text', data_files={'test_source': args.test_source})
-            # datasets library allows loading from an
-            # in-memory dict, so construct one from the source
-            # text tags that can be loaded
-            # NOTE: tags_included expects input sequences to
-            # be prefixed with a single language tag, e.g. de_DE
-            target_tags_dict = {'text': [text.split()[0] for text in data_dict['test_source']['text']]}
-            data_dict['target_tags'] = datasets.Dataset.from_dict(target_tags_dict)
-            simplifier.datasets = data_dict
-        elif args.target_tags is not None:
-            simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source, 'target_tags': args.target_tags })
-        else:
-            simplifier.datasets = datasets.load_dataset('text', data_files={'test_source': args.test_source })
+    model.datasets = datasets.load_dataset('text', data_files={'train_source': args.train_source,
+                                                               'train_target': args.train_target,
+                                                               'val_source': args.val_source,
+                                                               'val_target': args.val_target,
+                                                               'test_source': args.test_source,
+                                                               'test_target': args.test_target})
 
-    logger = TestTubeLogger(
-        save_dir=".",
-        name="decode.log",
-        version=0  # always use version=0
-    )
-
-    if torch.cuda.is_available and args.gpus > 0:
-        trainer = pl.Trainer(
-            gpus=args.gpus,
-            distributed_backend='ddp' if torch.cuda.is_available() else None,
-            replace_sampler_ddp=False,
-            limit_test_batches=args.test_percent_check,
-            logger=logger,
-            progress_bar_refresh_rate=args.progress_bar_refresh_rate,
-            precision=32 if args.fp32 else 16, amp_level='O2'
-        )
+    if args.wandb:
+        logger = WandbLogger(project=args.wandb)
     else:
-        trainer = pl.Trainer(
-            gpus=args.gpus,
-            replace_sampler_ddp=False,
-            limit_test_batches=args.test_percent_check,
-            logger=logger,
-            progress_bar_refresh_rate=args.progress_bar_refresh_rate,
+        logger = TestTubeLogger(
+            save_dir=args.save_dir,
+            name=args.save_prefix,
+            version=0  # always use version=0
         )
 
-    trainer.test(simplifier)
+    print(args)
 
-    print("Decoded outputs written to {}".format(args.translation))
+    model.lr_mode = 'max'
+    # if args.early_stopping_metric == 'val_loss':
+    if args.early_stopping_metric == 'vloss':
+        model.lr_mode = 'min'
+    early_stop_callback = EarlyStopping(monitor=args.early_stopping_metric, min_delta=args.min_delta,
+                                        patience=args.patience, verbose=True,
+                                        mode=model.lr_mode)  # metrics: val_loss, bleu, rougeL
+
+    custom_checkpoint_path = "checkpoint{{epoch:02d}}_{{{}".format(args.early_stopping_metric)
+    custom_checkpoint_path += ':.5f}'
+
+    checkpoint_callback = ModelCheckpoint(
+        filepath=os.path.join(args.save_dir, args.save_prefix, custom_checkpoint_path),
+        save_top_k=args.save_top_k,
+        verbose=True,
+        monitor=args.early_stopping_metric,
+        mode=model.lr_mode,
+        prefix='')
+
+    trainer = pl.Trainer(gpus=args.gpus, distributed_backend='ddp' if torch.cuda.is_available() else None,
+                         track_grad_norm=-1,
+                         max_epochs=args.max_epochs if not args.debug else 100,
+                         max_steps=None if not args.debug else 1,
+                         replace_sampler_ddp=False,
+                         accumulate_grad_batches=args.grad_accum,
+                         val_check_interval=args.val_every if not args.debug else 1,
+                         num_sanity_val_steps=args.num_sanity_val_steps,
+                         check_val_every_n_epoch=1 if not (args.debug) else 1,
+                         limit_val_batches=args.val_percent_check,
+                         limit_test_batches=args.test_percent_check,
+                         logger=logger,
+                         checkpoint_callback=checkpoint_callback if not args.disable_checkpointing else False,
+                         progress_bar_refresh_rate=args.progress_bar_refresh_rate,
+                         precision=32 if args.fp32 else 16, amp_level='O2',
+                         resume_from_checkpoint=args.resume_ckpt,
+                         callbacks=[early_stop_callback]
+                         )
+    ## write config + tokenizer to save_dir
+    # model.model.save_pretrained(args.save_dir + "/" + args.save_prefix)
+    # if args.remove_special_tokens_containing:
+    #     print("special tokens before:", model.tokenizer.special_tokens_map)
+    #     model.tokenizer = remove_special_tokens(model.tokenizer, args.remove_special_tokens_containing)
+    #     print("special tokens after:", model.tokenizer.special_tokens_map)
+    # model.tokenizer.save_pretrained(args.save_dir + "/" + args.save_prefix)
+    # trainer.fit(model)
+    # print("Training ended. Best checkpoint {} with {} {}.".format(model.best_checkpoint, model.best_metric,
+    # args.early_stopping_metric))
+    trainer.test(model)
 
 
 if __name__ == "__main__":
@@ -298,4 +308,3 @@ if __name__ == "__main__":
     parser = SimplifierScorer.add_model_specific_args(main_arg_parser, os.getcwd())
     args = parser.parse_args()
     main(args)
-
