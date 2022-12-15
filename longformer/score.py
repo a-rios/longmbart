@@ -295,7 +295,7 @@ def main(args):
 
 if __name__ == "__main__":
     main_arg_parser = argparse.ArgumentParser(description="simplification")
-    parser = InferenceSimplifier.add_model_specific_args(main_arg_parser, os.getcwd())
+    parser = SimplifierScorer.add_model_specific_args(main_arg_parser, os.getcwd())
     args = parser.parse_args()
     main(args)
 
