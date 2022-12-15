@@ -85,22 +85,22 @@ logging.basicConfig(level=logging.INFO)
 class SimplifierScorer(Simplifier):
 
     def __init__(self, params):
-        super().__init__()
-        self.args = params
-        self.hparams = params
-        self.src_lang = self.args.src_lang
-        self.tgt_lang = self.args.tgt_lang
-        self.tags_included = self.args.tags_included
-        if self.args.from_pretrained is not None or args.resume_ckpt is not None:  ## TODO check if this is true with resume_ckpt
-            self._set_config()
-            self._load_pretrained()
-
-        self.train_dataloader_object = self.val_dataloader_object = self.test_dataloader_object = None
-        self.current_checkpoint = 0
-        self.best_checkpoint = None
-        self.best_metric = 10000 if self.args.early_stopping_metric == 'vloss' else 0  ## keep track of best dev value of whatever metric is used in early stopping callback
-        self.num_not_improved = 0
-        self.save_hyperparameters()
+        super().__init__(params)
+        # self.args = params
+        # self.hparams = params
+        # self.src_lang = self.args.src_lang
+        # self.tgt_lang = self.args.tgt_lang
+        # self.tags_included = self.args.tags_included
+        # if self.args.from_pretrained is not None or args.resume_ckpt is not None:  ## TODO check if this is true with resume_ckpt
+        #     self._set_config()
+        #     self._load_pretrained()
+        #
+        # self.train_dataloader_object = self.val_dataloader_object = self.test_dataloader_object = None
+        # self.current_checkpoint = 0
+        # self.best_checkpoint = None
+        # self.best_metric = 10000 if self.args.early_stopping_metric == 'vloss' else 0  ## keep track of best dev value of whatever metric is used in early stopping callback
+        # self.num_not_improved = 0
+        # self.save_hyperparameters()
 
     def forward(self, input_ids, decoder_input_ids, labels):
         input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode,
