@@ -150,9 +150,12 @@ class SimplifierScorer(InferenceSimplifier):
         input_ids, ref, tags = batch
         source_strs = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=not self.args.keep_special_tokens)
         print("source", source_strs)
-        ref_strs = self.tokenizer.batch_decode(ref.sequences.tolist(), skip_special_tokens=not
+        ref_strs = self.tokenizer.batch_decode(ref.tolist(), skip_special_tokens=not
         self.args.keep_special_tokens)
         print("ref",ref_strs)
+        tags_strs = self.tokenizer.batch_decode(tags.tolist(), skip_special_tokens=not
+        self.args.keep_special_tokens)
+        print("ref", tags_strs)
 
 
         # generated_strs = []
