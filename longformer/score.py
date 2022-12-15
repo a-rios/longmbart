@@ -91,22 +91,32 @@ class SimplifierScorer(InferenceSimplifier):
     def _get_dataloader(self, current_dataloader, split_name, is_train):
         if current_dataloader is not None:
             return current_dataloader
-        reference = None
-        if self.args.test_target is not None:
-            reference = self.datasets[split_name + "_target"]
-        target_tags = None
-        if self.args.target_tags is not None:
-            target_tags = self.datasets["target_tags"]
-        elif self.args.infer_target_tags:
-            target_tags = self.datasets["target_tags"]
-        dataset = SimplificationDataset(inputs=self.datasets[split_name + "_source"], reference=reference , name=split_name, tokenizer=self.tokenizer,
-                                       max_input_len=self.max_input_len, max_output_len=self.max_output_len, src_lang=self.src_lang, tgt_lang=self.tgt_lang, tags_included=self.tags_included, target_tags=target_tags)
 
-        sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=is_train) if self.trainer.use_ddp else None
+        dataset = SimplificationDataset(inputs=self.datasets[split_name + "_source"],
+                                        labels=self.datasets[split_name + "_target"], name=split_name,
+                                        tokenizer=self.tokenizer,
+                                        max_input_len=self.args.max_input_len, max_output_len=self.args.max_output_len,
+                                        src_lang=self.src_lang, tgt_lang=self.tgt_lang,
+                                        tags_included=args.tags_included)
+
+        sampler = torch.utils.data.distributed.DistributedSampler(dataset,
+                                                                  shuffle=is_train) if self.trainer.use_ddp else None
 
         return DataLoader(dataset, batch_size=self.args.batch_size, shuffle=(sampler is None),
                           num_workers=self.args.num_workers, sampler=sampler,
                           collate_fn=SimplificationDataset.collate_fn)
+
+    def train_dataloader(self):
+        self.train_dataloader_object = self._get_dataloader(self.train_dataloader_object, 'train', is_train=True)
+        return self.train_dataloader_object
+
+    def val_dataloader(self):
+        self.val_dataloader_object = self._get_dataloader(self.val_dataloader_object, 'val', is_train=False)
+        return self.val_dataloader_object
+
+    def test_dataloader(self):
+        self.test_dataloader_object = self._get_dataloader(self.test_dataloader_object, 'test', is_train=False)
+        return self.test_dataloader_object
 
     def forward(self, input_ids, decoder_input_ids, labels):
         input_ids, attention_mask = prepare_input(input_ids, self.model, self.config.attention_mode,
