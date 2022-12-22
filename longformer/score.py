@@ -138,6 +138,11 @@ class SimplifierScorer(InferenceSimplifier):
         parser.add_argument("--num_workers", type=int, default=0, help="Number of data loader workers")
         parser.add_argument("--gpus", type=int, default=-1, help="Number of gpus. 0 for CPU")
 
+        parser.add_argument("--test_percent_check", default=1.00, type=float, help='Percent of test data used')
+        parser.add_argument("--global_attention_indices", type=int, nargs='+', default=[-1], required=False,
+                            help="List of indices of positions with global attention for longformer attention. Supports negative indices (-1 == last non-padding token). Default: [-1] == last source token (==lang_id) .")
+        parser.add_argument("--keep_special_tokens", default=False, action="store_true",
+                            help="If true, do not skip special tokens.")
         parser.add_argument("--remove_special_tokens_containing", type=str, nargs="+",
                             help="Remove tokens from the special_tokens_map that contain this string")
 
@@ -206,6 +211,7 @@ def main(args):
             gpus=args.gpus,
             distributed_backend='ddp' if torch.cuda.is_available() else None,
             replace_sampler_ddp=False,
+            limit_test_batches=args.test_percent_check,
             logger=logger,
             progress_bar_refresh_rate=args.progress_bar_refresh_rate,
             precision=32 if args.fp32 else 16, amp_level='O2'
@@ -214,6 +220,7 @@ def main(args):
         trainer = pl.Trainer(
             gpus=args.gpus,
             replace_sampler_ddp=False,
+            limit_test_batches=args.test_percent_check,
             logger=logger,
             progress_bar_refresh_rate=args.progress_bar_refresh_rate,
         )
