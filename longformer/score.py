@@ -58,17 +58,9 @@ class SimplifierScorer(InferenceSimplifier):
         sampler = torch.utils.data.distributed.DistributedSampler(dataset,
                                                                   shuffle=is_train) if self.trainer.use_ddp else None
 
-        return DataLoader(dataset, batch_size=10, shuffle=(sampler is None),
+        return DataLoader(dataset, batch_size=1, shuffle=(sampler is None),
                           num_workers=self.args.num_workers, sampler=sampler,
                           collate_fn=SimplificationDataset.collate_fn)
-
-    def train_dataloader(self):
-        self.train_dataloader_object = self._get_dataloader(self.train_dataloader_object, 'train', is_train=True)
-        return self.train_dataloader_object
-
-    def val_dataloader(self):
-        self.val_dataloader_object = self._get_dataloader(self.val_dataloader_object, 'val', is_train=False)
-        return self.val_dataloader_object
 
     def test_dataloader(self):
         self.test_dataloader_object = self._get_dataloader(self.test_dataloader_object, 'test', is_train=False)
@@ -160,6 +152,11 @@ class SimplifierScorer(InferenceSimplifier):
 
 
 def main(args):
+
+    if Path(args.output).is_file():
+        logging.info("Output file `{}` already exists and will be overwritten...".format(args.translation))
+        Path(args.output).unlink()
+
     checkpoint_path = os.path.join(args.model_path, args.checkpoint_name)
     simplifier = SimplifierScorer(args)
 
@@ -227,7 +224,7 @@ def main(args):
 
     trainer.test(simplifier)
 
-    print("Decoded outputs written to {}".format(args.translation))
+    print("Scores written to {}".format(args.output))
 
 
 if __name__ == "__main__":
