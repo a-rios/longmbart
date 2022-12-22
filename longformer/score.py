@@ -154,7 +154,7 @@ class SimplifierScorer(InferenceSimplifier):
 def main(args):
 
     if Path(args.output).is_file():
-        logging.info("Output file `{}` already exists and will be overwritten...".format(args.translation))
+        logging.info("Output file `{}` already exists and will be overwritten...".format(args.output))
         Path(args.output).unlink()
 
     checkpoint_path = os.path.join(args.model_path, args.checkpoint_name)
