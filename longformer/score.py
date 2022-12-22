@@ -138,6 +138,9 @@ class SimplifierScorer(InferenceSimplifier):
         parser.add_argument("--num_workers", type=int, default=0, help="Number of data loader workers")
         parser.add_argument("--gpus", type=int, default=-1, help="Number of gpus. 0 for CPU")
 
+        parser.add_argument("--remove_special_tokens_containing", type=str, nargs="+",
+                            help="Remove tokens from the special_tokens_map that contain this string")
+
         #TODO ??
         parser.add_argument("--output_to_json", default=False, action="store_true",
                             help='If true, decoding output is a verbose JSONL containing, src, tgt, and scored model output hyps')
