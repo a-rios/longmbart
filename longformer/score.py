@@ -143,20 +143,15 @@ class SimplifierScorer(InferenceSimplifier):
         return loss
 
     def test_step(self, batch, batch_nb):
-        print("batch", batch)
         loss = self.forward(*batch)
-        print("loss",loss)
-
         input_ids, ref, tags = batch
         source_strs = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=not self.args.keep_special_tokens)
-        print("source", source_strs)
-        ref_strs = self.tokenizer.batch_decode(ref.tolist(), skip_special_tokens=not
+        target_strs = self.tokenizer.batch_decode(tags.tolist(), skip_special_tokens=not
         self.args.keep_special_tokens)
-        print("ref",ref_strs)
-        tags_strs = self.tokenizer.batch_decode(tags.tolist(), skip_special_tokens=not
-        self.args.keep_special_tokens)
-        print("ref", tags_strs)
+        logging.debug("loss:", loss, "source:", source_strs, "target:", target_strs)
 
+        with open(self.args.output, 'a') as f:
+             f.write(str(loss) + "\n")
 
         # generated_strs = []
         #
