@@ -201,7 +201,7 @@ class InferenceSimplifier(pl.LightningModule):
                 # Ensure output hyps are sorted by
                 # overall NLL probability scores (smaller = better).
                 scored_hyps = {score: hyp for score, hyp in zip(scores, hyps)}
-                for i, score in enumerate(sorted(scored_hyps.keys(), reverse=True)):
+                for i, score in enumerate(sorted(scored_hyps.keys(), reverse=False)):
                     # add the 1-best hypothesis to generated_strs for evaluation             
                     if i == 0:
                         generated_strs.append(scored_hyps[score])
@@ -212,7 +212,7 @@ class InferenceSimplifier(pl.LightningModule):
                     f.write(json_line+"\n")
         
             if self.args.test_target is not None:
-                return self.get_eval_scores(ref, generated_strs, self.tags_included)
+                return get_eval_scores(ref, generated_strs, self.tags_included)
 
             else:
                 return {'decoded' : generated_strs}
