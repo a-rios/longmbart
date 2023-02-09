@@ -255,7 +255,8 @@ class Simplifier(pl.LightningModule):
                             'input_size': batch[0].numel(),
                             'output_size': batch[1].numel(),
                             'mem': torch.cuda.memory_allocated(loss.device) / 1024 ** 3 if torch.cuda.is_available() else 0}
-        self.log('train-loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=False)
+        self.log('train-loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log('lr', lr, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
     def validation_step(self, batch, batch_nb):
@@ -381,7 +382,8 @@ class Simplifier(pl.LightningModule):
         parser.add_argument("--tokenizer", type=str, help="Path to the tokenizer directory.")
         parser.add_argument("--save_dir", type=str, default='simplification', help="Directory to save models.")
         parser.add_argument("--save_prefix", type=str, default='test', help="subfolder in save_dir for this model")
-        parser.add_argument("--resume_ckpt", type=str, help="Path of a checkpoint to resume from")
+        parser.add_argument("--resume_ckpt", type=str, help="Path of a checkpoint to resume from (will load full checkpoint, weights, optimizer + lr scheduler states).")
+        parser.add_argument("--pretrained_ckpt", type=str, help="Fine-tune further from given checkpoint (will only load weights but not optimizer and lr scheduler states).")
         parser.add_argument("--from_pretrained", type=str, default=None,  help="Path to a checkpoint to load model weights but not training state")
         parser.add_argument("--num_sanity_val_steps", type=int, default=0,  help="Number of evaluation sanity steps to run before starting the training. Default: 0.")
         
@@ -479,7 +481,7 @@ def main(args):
         model.lr_mode='min'
     early_stop_callback = EarlyStopping(monitor=args.early_stopping_metric, min_delta=args.min_delta, patience=args.patience, verbose=True, mode=model.lr_mode) # metrics: val_loss, bleu, rougeL
     
-    custom_checkpoint_path = "checkpoint{{epoch:02d}}_{{{}".format(args.early_stopping_metric )
+    custom_checkpoint_path = "{{epoch:02d}}_{{{}".format(args.early_stopping_metric )
     custom_checkpoint_path += ':.5f}'
   
     checkpoint_callback = ModelCheckpoint(
@@ -489,6 +491,12 @@ def main(args):
         monitor=args.early_stopping_metric,
         mode=model.lr_mode,
         prefix='')
+
+    if args.pretrained_ckpt is not None:
+        assert args.resume_ckpt is None, "Both pretrained_ckpt and resume_ckpt are set, can only load one. Use --resume_ckpt to continue training (load full checkpoint, including optimizer and lr scheduler states). Use --pretrained_ckpt to start new fine-tuning from given checkpoint (load weights only)."
+
+        print(f"Loading pretraind checkpoint from {args.pretrained_ckpt}")
+        model.load_from_checkpoint(args.pretrained_ckpt)
 
     trainer = pl.Trainer(gpus=args.gpus, distributed_backend='ddp' if torch.cuda.is_available() else None,
                          track_grad_norm=-1,
