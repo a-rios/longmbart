@@ -499,6 +499,7 @@ def main(args):
         # model.load_from_checkpoint(args.pretrained_ckpt) # load_from_checkpoint does weird stuff, load weights directly with torch instead
         cp = torch.load(args.pretrained_ckpt)
         model.load_state_dict(cp['state_dict'])
+        del cp
 
     trainer = pl.Trainer(gpus=args.gpus, distributed_backend='ddp' if torch.cuda.is_available() else None,
                          track_grad_norm=-1,
