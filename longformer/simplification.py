@@ -496,7 +496,9 @@ def main(args):
         assert args.resume_ckpt is None, "Both pretrained_ckpt and resume_ckpt are set, can only load one. Use --resume_ckpt to continue training (load full checkpoint, including optimizer and lr scheduler states). Use --pretrained_ckpt to start new fine-tuning from given checkpoint (load weights only)."
 
         print(f"Loading pretraind checkpoint from {args.pretrained_ckpt}")
-        model.load_from_checkpoint(args.pretrained_ckpt)
+        # model.load_from_checkpoint(args.pretrained_ckpt) # load_from_checkpoint does weird stuff, load weights directly with torch instead
+        cp = torch.load(args.pretrained_ckpt)
+        model.load_state_dict(cp['state_dict'])
 
     trainer = pl.Trainer(gpus=args.gpus, distributed_backend='ddp' if torch.cuda.is_available() else None,
                          track_grad_norm=-1,
