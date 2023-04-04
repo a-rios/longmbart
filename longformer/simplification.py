@@ -2,6 +2,7 @@ import os
 import argparse
 import random
 import numpy as np
+import re
 
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -201,7 +202,10 @@ class Simplifier(pl.LightningModule):
             self._load_pretrained()
 
         self.train_dataloader_object = self.val_dataloader_object = self.test_dataloader_object = None
-        self.current_checkpoint =0
+        if self.args.resume_ckpt is not None:
+            self.current_checkpoint = re.search(r'epoch=(\d+)_', self.args.resume_ckpt).group(1)
+        else:
+            self.current_checkpoint = 0
         self.best_checkpoint = None
         self.best_metric = 10000 if self.args.early_stopping_metric == 'vloss' else 0 ## keep track of best dev value of whatever metric is used in early stopping callback
         self.num_not_improved = 0
