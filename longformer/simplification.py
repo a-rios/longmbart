@@ -204,7 +204,7 @@ class Simplifier(pl.LightningModule):
         self.train_dataloader_object = self.val_dataloader_object = self.test_dataloader_object = None
         if self.args.resume_ckpt is not None:
             self.current_checkpoint = re.search(r'epoch=(\d+)_', self.args.resume_ckpt).group(1)
-            self.current_checkpoint += 1
+            self.current_checkpoint = int(self.current_checkpoint) +1
         else:
             self.current_checkpoint = 0
         self.best_checkpoint = None
