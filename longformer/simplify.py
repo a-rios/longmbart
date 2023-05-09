@@ -146,7 +146,7 @@ class InferenceSimplifier(pl.LightningModule):
                                             bad_words_ids=bad_words_ids)
         else:
             generated_ids = self.model.generate(input_ids=input_ids, attention_mask=attention_mask,
-                                            use_cache=True, max_length=self.max_input_len,
+                                            use_cache=True, max_length=self.max_output_len,
                                             num_beams=self.args.beam_size, pad_token_id=self.tokenizer.pad_token_id, decoder_start_token_id=self.tokenizer.lang_code_to_id[self.tgt_lang],
                                             do_sample=self.args.do_sample,
                                             temperature=self.args.temperature,
